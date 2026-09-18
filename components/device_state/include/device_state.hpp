@@ -62,9 +62,16 @@ namespace device {
         bool preset_modified;
     };
 
+    struct MutationResult {
+        DeviceError error;
+        bool changed;
+        uint32_t revision;
+    };
+
     const State& get_state();
+    uint32_t get_revision();
 
     esp_err_t init();
 
-    DeviceError set_output_gain(size_t output, float gain_db);
+    MutationResult set_output_gain(size_t output, float gain_db);
 }

@@ -10,6 +10,7 @@ namespace device {
         constexpr float_t OutputGainMaxDb = 12.0f;
 
         State s_state = {};
+        uint32_t s_revision = 0;
 
         void init_default_peq_band(PeqBand *band) {
             *band = (PeqBand){
@@ -25,7 +26,7 @@ namespace device {
             state->gain_db = 0.0f;
             state->muted = false;
 
-            for (auto & i : state->peq) {
+            for (auto &i: state->peq) {
                 init_default_peq_band(&i);
             }
         }
@@ -34,7 +35,7 @@ namespace device {
             state->gain_db = 0.0f;
             state->muted = false;
 
-            for (auto & i : state->peq) {
+            for (auto &i: state->peq) {
                 init_default_peq_band(&i);
             }
         }
@@ -43,40 +44,71 @@ namespace device {
     esp_err_t init() {
         memset(&s_state, 0, sizeof(s_state));
 
-        for (auto & input : s_state.dsp.inputs) {
+        for (auto &input: s_state.dsp.inputs) {
             init_default_input_state(&input);
         }
 
-        for (auto & output : s_state.dsp.outputs) {
+        for (auto &output: s_state.dsp.outputs) {
             init_default_output_state(&output);
         }
 
         s_state.active_preset = InvalidPreset;
         s_state.preset_modified = false;
 
+        s_revision = 0;
         return ESP_OK;
     }
 
-    const State& get_state() {
+    const State &get_state() {
         return s_state;
     }
 
-    DeviceError set_output_gain(const size_t output, const float gain_db) {
+    uint32_t get_revision() {
+        return s_revision;
+    }
+
+    MutationResult set_output_gain(const size_t output, const float gain_db) {
         if (output >= OutputCount) {
-            return DeviceError::InvalidOutput;
+            return {
+                .error = DeviceError::InvalidOutput,
+                .changed = false,
+                .revision = s_revision
+            };
         }
 
         if (!std::isfinite(gain_db)) {
-            return DeviceError::InvalidGain;
+            return {
+                .error = DeviceError::InvalidGain,
+                .changed = false,
+                .revision = s_revision
+            };
         }
 
         if (gain_db < OutputGainMinDB || gain_db > OutputGainMaxDb) {
-            return DeviceError::GainOutOfRange;
+            return {
+                .error = DeviceError::GainOutOfRange,
+                .changed = false,
+                .revision = s_revision
+            };
+        }
+
+        if (s_state.dsp.outputs[output].gain_db == gain_db) {
+            return {
+                .error = DeviceError::Ok,
+                .changed = false,
+                .revision = s_revision
+            };
         }
 
         s_state.dsp.outputs[output].gain_db = gain_db;
         s_state.preset_modified = true;
 
-        return DeviceError::Ok;
+        ++s_revision;
+
+        return {
+            .error = DeviceError::Ok,
+            .changed = true,
+            .revision = s_revision
+        };
     }
 }

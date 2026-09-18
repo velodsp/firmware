@@ -293,7 +293,7 @@ namespace protocol {
             return ESP_ERR_INVALID_STATE;
         }
 
-        esp_err_t send_ok(httpd_req_t *req, uint32_t request_id) {
+        esp_err_t send_ok(httpd_req_t *req, uint32_t request_id, uint32_t revision) {
             cJSON *root = cJSON_CreateObject();
             if (root == nullptr) {
                 return ESP_ERR_NO_MEM;
@@ -301,6 +301,7 @@ namespace protocol {
 
             cJSON_AddNumberToObject(root, "id", request_id);
             cJSON_AddStringToObject(root, "type", "ok");
+            cJSON_AddNumberToObject(root, "revision", revision);
 
             const esp_err_t err = send_json(req, root);
             cJSON_Delete(root);
@@ -329,9 +330,11 @@ namespace protocol {
                 return send_field_error(req, request_id, "gain_db", gain_err);
             }
 
-            switch (device::set_output_gain(output_index, gain_db)) {
+            const auto result = device::set_output_gain(output_index, gain_db);
+
+            switch (result.error) {
                 case device::DeviceError::Ok:
-                    return send_ok(req, request_id);
+                    break;
 
                 case device::DeviceError::InvalidOutput:
                     return send_error(req, request_id, "out_of_range", "output", "output does not exist");
@@ -343,7 +346,7 @@ namespace protocol {
                     return send_error(req, request_id, "invalid_gain", "gain_db");
             }
 
-            return send_error(req, request_id, "internal_error");
+            return send_ok(req, request_id, result.revision);
         }
 
 
@@ -401,6 +404,7 @@ namespace protocol {
         }
 
         cJSON_AddNumberToObject(root, "id", request_id);
+        cJSON_AddNumberToObject(root, "revision", device::get_revision());
         cJSON_AddStringToObject(root, "type", "state");
 
         cJSON *state_json = serialize_device_state(device::get_state());
