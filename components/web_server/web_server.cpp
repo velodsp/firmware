@@ -59,6 +59,8 @@ esp_err_t web_server_start() {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
+    config.lru_purge_enable = true;
+
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
         return err;
