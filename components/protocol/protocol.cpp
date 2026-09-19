@@ -238,6 +238,53 @@ namespace protocol {
             return err;
         }
 
+        esp_err_t broadcast_json(httpd_handle_t server, const cJSON *json) {
+            char *payload = cJSON_PrintUnformatted(json);
+
+            if (payload == nullptr) {
+                return ESP_ERR_NO_MEM;
+            }
+
+            httpd_ws_frame_t frame = {
+                .final = true,
+                .fragmented = false,
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = reinterpret_cast<uint8_t *>(payload),
+                .len = strlen(payload)
+            };
+
+            std::array<int, CONFIG_LWIP_MAX_SOCKETS> client_fds{};
+
+            size_t client_count = client_fds.size();
+
+            const esp_err_t list_err = httpd_get_client_list(server, &client_count, client_fds.data());
+
+            if (list_err != ESP_OK) {
+                cJSON_free(payload);
+                return list_err;
+            }
+
+            esp_err_t result = ESP_OK;
+
+            for (size_t i = 0; i < client_count; ++i) {
+                const int fd = client_fds[i];
+
+                if (httpd_ws_get_fd_info(server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
+                    continue;
+                }
+
+                const esp_err_t err = httpd_ws_send_frame_async(server, fd, &frame);
+
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to broadcast to fd=%d: %s", fd, esp_err_to_name(err));
+                    result = err;
+                }
+            }
+
+            cJSON_free(payload);
+            return result;
+        }
+
         esp_err_t send_error(httpd_req_t *req, std::optional<uint32_t> request_id, const char *code,
                              const char *field = nullptr,
                              const char *message = nullptr) {
@@ -314,6 +361,59 @@ namespace protocol {
             return send_state(req, request_id);
         }
 
+        esp_err_t broadcast_output_gain_update(httpd_handle_t server, const uint32_t revision, const size_t output,
+                                               const float gain_db) {
+            cJSON *root = cJSON_CreateObject();
+
+            if (root == nullptr) {
+                return ESP_ERR_NO_MEM;
+            }
+
+            cJSON_AddStringToObject(root, "type", "state_update");
+            cJSON_AddNumberToObject(root, "revision", revision);
+
+            cJSON *changes = cJSON_AddArrayToObject(root, "changes");
+
+            if (changes == nullptr) {
+                cJSON_Delete(root);
+                return ESP_ERR_NO_MEM;
+            }
+
+            // output gain
+            {
+                cJSON *change = cJSON_CreateObject();
+
+                if (change == nullptr) {
+                    cJSON_Delete(root);
+                    return ESP_ERR_NO_MEM;
+                }
+
+                cJSON_AddStringToObject(change, "type", "output_gain");
+                cJSON_AddNumberToObject(change, "output", output);
+                cJSON_AddNumberToObject(change, "gain_db", gain_db);
+                cJSON_AddItemToArray(changes, change);
+            }
+
+            // preset_modified
+            {
+                cJSON *change = cJSON_CreateObject();
+
+                if (change == nullptr) {
+                    cJSON_Delete(root);
+                    return ESP_ERR_NO_MEM;
+                }
+
+                cJSON_AddStringToObject(change, "type", "preset_modified");
+                cJSON_AddBoolToObject(change, "value", true);
+                cJSON_AddItemToArray(changes, change);
+            }
+
+            const esp_err_t err = broadcast_json(server, root);
+            cJSON_Delete(root);
+
+            return err;
+        }
+
         esp_err_t handle_set_output_gain(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
             uint32_t output_index;
 
@@ -346,9 +446,17 @@ namespace protocol {
                     return send_error(req, request_id, "invalid_gain", "gain_db");
             }
 
+            if (result.changed) {
+                const esp_err_t broadcast_err = broadcast_output_gain_update(
+                    req->handle, result.revision, output_index, gain_db);
+
+                if (broadcast_err != ESP_OK) {
+                    ESP_LOGW(TAG, "State update broadcast failed: %s", esp_err_to_name(broadcast_err));
+                }
+            }
+
             return send_ok(req, request_id, result.revision);
         }
-
 
         using ProtocolHandler = esp_err_t (*)(
             httpd_req_t *req,
