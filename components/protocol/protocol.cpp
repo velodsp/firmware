@@ -26,6 +26,34 @@ namespace protocol {
             OutOfRange,
         };
 
+        enum class ChannelKind {
+            Input,
+            Output,
+        };
+
+        template <ChannelKind>
+        struct ChannelTraits;
+
+        template <>
+        struct ChannelTraits<ChannelKind::Input> {
+            static constexpr auto index_field = "input";
+            static constexpr auto change_type = "input_gain";
+
+            static device::MutationResult set_gain(const size_t index, const float gain_db) {
+                return device::set_input_gain(index, gain_db);
+            }
+        };
+
+        template <>
+        struct ChannelTraits<ChannelKind::Output> {
+            static constexpr auto index_field = "output";
+            static constexpr auto change_type = "output_gain";
+
+            static device::MutationResult set_gain(const size_t index, const float gain_db) {
+                return device::set_output_gain(index, gain_db);
+            }
+        };
+
         JsonFieldError json_get_int(const cJSON *root, const char *name, int *out) {
             const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
 
@@ -356,8 +384,11 @@ namespace protocol {
             return err;
         }
 
-        esp_err_t broadcast_output_gain_update(httpd_handle_t server, const uint32_t revision, const size_t output,
+        template <ChannelKind Kind>
+        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision, size_t index,
                                                const float gain_db) {
+            using Traits = ChannelTraits<Kind>;
+
             cJSON *root = cJSON_CreateObject();
 
             if (root == nullptr) {
@@ -374,7 +405,7 @@ namespace protocol {
                 return ESP_ERR_NO_MEM;
             }
 
-            // output gain
+            // channel gain
             {
                 cJSON *change = cJSON_CreateObject();
 
@@ -383,8 +414,8 @@ namespace protocol {
                     return ESP_ERR_NO_MEM;
                 }
 
-                cJSON_AddStringToObject(change, "type", "output_gain");
-                cJSON_AddNumberToObject(change, "output", output);
+                cJSON_AddStringToObject(change, "type", Traits::change_type);
+                cJSON_AddNumberToObject(change, Traits::index_field, index);
                 cJSON_AddNumberToObject(change, "gain_db", gain_db);
                 cJSON_AddItemToArray(changes, change);
             }
@@ -409,13 +440,16 @@ namespace protocol {
             return err;
         }
 
-        esp_err_t handle_set_output_gain(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
-            uint32_t output_index;
+        template <ChannelKind Kind>
+        esp_err_t handle_set_channel_gain(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
+            using Traits = ChannelTraits<Kind>;
 
-            const auto output_err = json_get_uint32(root, "output", &output_index);
+            uint32_t index;
 
-            if (output_err != JsonFieldError::Ok) {
-                return send_field_error(req, request_id, "output", output_err);
+            const auto index_err = json_get_uint32(root, Traits::index_field, &index);
+
+            if (index_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, Traits::index_field, index_err);
             }
 
             float gain_db;
@@ -425,17 +459,17 @@ namespace protocol {
                 return send_field_error(req, request_id, "gain_db", gain_err);
             }
 
-            const auto result = device::set_output_gain(output_index, gain_db);
+            const auto result = Traits::set_gain(index, gain_db);
 
             switch (result.error) {
                 case device::DeviceError::Ok:
                     break;
 
-                case device::DeviceError::InvalidOutput:
-                    return send_error(req, request_id, "out_of_range", "output", "output does not exist");
+                case device::DeviceError::InvalidChannel:
+                    return send_error(req, request_id, "out_of_range", "channel", "channel does not exist");
 
                 case device::DeviceError::GainOutOfRange:
-                    return send_error(req, request_id, "out_of_range", "gain_db", "gain_db must be between -80 and 12");
+                    return send_error(req, request_id, "out_of_range", "gain_db");
 
                 case device::DeviceError::InvalidGain:
                     return send_error(req, request_id, "invalid_gain", "gain_db");
@@ -444,8 +478,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
-                const esp_err_t broadcast_err = broadcast_output_gain_update(
-                    req->handle, result.revision, output_index, gain_db);
+                const esp_err_t broadcast_err = broadcast_channel_gain_update<Kind>(
+                    req->handle, result.revision, index, gain_db);
 
                 if (broadcast_err != ESP_OK) {
                     ESP_LOGW(TAG, "State update broadcast failed: %s", esp_err_to_name(broadcast_err));
@@ -467,7 +501,8 @@ namespace protocol {
         };
 
         constexpr std::array COMMANDS{
-            ProtocolCommand{"set_output_gain", handle_set_output_gain},
+            ProtocolCommand{"set_input_gain", handle_set_channel_gain<ChannelKind::Input>},
+            ProtocolCommand{"set_output_gain", handle_set_channel_gain<ChannelKind::Output>},
         };
 
         esp_err_t dispatch_command(httpd_req_t *req, uint32_t request_id, const cJSON *root, std::string_view type) {
