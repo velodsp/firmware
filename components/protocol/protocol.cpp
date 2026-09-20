@@ -356,11 +356,6 @@ namespace protocol {
             return err;
         }
 
-        esp_err_t handle_get_state(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
-            (void) root;
-            return send_state(req, request_id);
-        }
-
         esp_err_t broadcast_output_gain_update(httpd_handle_t server, const uint32_t revision, const size_t output,
                                                const float gain_db) {
             cJSON *root = cJSON_CreateObject();
@@ -446,6 +441,8 @@ namespace protocol {
                     return send_error(req, request_id, "invalid_gain", "gain_db");
             }
 
+            const esp_err_t response_err = send_ok(req, request_id, result.revision);
+
             if (result.changed) {
                 const esp_err_t broadcast_err = broadcast_output_gain_update(
                     req->handle, result.revision, output_index, gain_db);
@@ -455,7 +452,7 @@ namespace protocol {
                 }
             }
 
-            return send_ok(req, request_id, result.revision);
+            return response_err;
         }
 
         using ProtocolHandler = esp_err_t (*)(
@@ -470,7 +467,6 @@ namespace protocol {
         };
 
         constexpr std::array COMMANDS{
-            ProtocolCommand{"get_state", handle_get_state},
             ProtocolCommand{"set_output_gain", handle_set_output_gain},
         };
 
@@ -498,30 +494,12 @@ namespace protocol {
         cJSON_AddNumberToObject(root, "protocol_version", 1);
         cJSON_AddStringToObject(root, "firmware_version", "0.1.0");
 
-        const esp_err_t err = send_json(req, root);
-
-        cJSON_Delete(root);
-
-        return err;
-    }
-
-    esp_err_t send_state(httpd_req_t *req, const uint32_t request_id) {
-        cJSON *root = cJSON_CreateObject();
-        if (root == nullptr) {
-            return ESP_ERR_NO_MEM;
-        }
-
-        cJSON_AddNumberToObject(root, "id", request_id);
         cJSON_AddNumberToObject(root, "revision", device::get_revision());
-        cJSON_AddStringToObject(root, "type", "state");
-
         cJSON *state_json = serialize_device_state(device::get_state());
-
         if (state_json == nullptr) {
             cJSON_Delete(root);
             return ESP_ERR_NO_MEM;
         }
-
         cJSON_AddItemToObject(root, "state", state_json);
 
         const esp_err_t err = send_json(req, root);
