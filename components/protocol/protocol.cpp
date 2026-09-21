@@ -24,34 +24,7 @@ namespace protocol {
             NotFinite,
             NotInteger,
             OutOfRange,
-        };
-
-        enum class ChannelKind {
-            Input,
-            Output,
-        };
-
-        template <ChannelKind>
-        struct ChannelTraits;
-
-        template <>
-        struct ChannelTraits<ChannelKind::Input> {
-            static constexpr auto index_field = "input";
-            static constexpr auto change_type = "input_gain";
-
-            static device::MutationResult set_gain(const size_t index, const float gain_db) {
-                return device::set_input_gain(index, gain_db);
-            }
-        };
-
-        template <>
-        struct ChannelTraits<ChannelKind::Output> {
-            static constexpr auto index_field = "output";
-            static constexpr auto change_type = "output_gain";
-
-            static device::MutationResult set_gain(const size_t index, const float gain_db) {
-                return device::set_output_gain(index, gain_db);
-            }
+            InvalidChannel
         };
 
         JsonFieldError json_get_int(const cJSON *root, const char *name, int *out) {
@@ -361,6 +334,9 @@ namespace protocol {
                 case JsonFieldError::NotInteger:
                     return send_error(req, request_id, "not_integer", field);
 
+                case JsonFieldError::InvalidChannel:
+                    return send_error(req, request_id, "invalid_channel", field);
+
                 case JsonFieldError::Ok:
                     break;
             }
@@ -384,11 +360,57 @@ namespace protocol {
             return err;
         }
 
-        template <ChannelKind Kind>
-        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision, size_t index,
-                                               const float gain_db) {
-            using Traits = ChannelTraits<Kind>;
+        JsonFieldError json_get_channel_target(const cJSON *root, device::ChannelTarget *out) {
+            const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "channel_type");
 
+            if (type == nullptr) {
+                return JsonFieldError::Missing;
+            }
+
+            if (!cJSON_IsString(type)) {
+                return JsonFieldError::WrongType;
+            }
+
+            device::ChannelKind kind;
+
+            if (strcmp(type->valuestring, "input") == 0) {
+                kind = device::ChannelKind::Input;
+            } else if (strcmp(type->valuestring, "output") == 0) {
+                kind = device::ChannelKind::Output;
+            } else {
+                return JsonFieldError::InvalidChannel;
+            }
+
+            uint32_t index;
+
+            const auto index_error = json_get_uint32(root, "channel", &index);
+
+            if (index_error != JsonFieldError::Ok) {
+                return index_error;
+            }
+
+            *out = {
+                .kind = kind,
+                .index = index
+            };
+
+            return JsonFieldError::Ok;
+        }
+
+        const char *channel_kind_to_string(device::ChannelKind kind) {
+            switch (kind) {
+                case device::ChannelKind::Input:
+                    return "input";
+
+                case device::ChannelKind::Output:
+                    return "output";
+            }
+
+            return "unknown";
+        }
+
+        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision,
+                                                device::ChannelTarget target, const float gain_db) {
             cJSON *root = cJSON_CreateObject();
 
             if (root == nullptr) {
@@ -414,8 +436,9 @@ namespace protocol {
                     return ESP_ERR_NO_MEM;
                 }
 
-                cJSON_AddStringToObject(change, "type", Traits::change_type);
-                cJSON_AddNumberToObject(change, Traits::index_field, index);
+                cJSON_AddStringToObject(change, "type", "channel_gain");
+                cJSON_AddStringToObject(change, "channel_type", channel_kind_to_string(target.kind));
+                cJSON_AddNumberToObject(change, "channel", target.index);
                 cJSON_AddNumberToObject(change, "gain_db", gain_db);
                 cJSON_AddItemToArray(changes, change);
             }
@@ -440,16 +463,14 @@ namespace protocol {
             return err;
         }
 
-        template <ChannelKind Kind>
         esp_err_t handle_set_channel_gain(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
-            using Traits = ChannelTraits<Kind>;
+            device::ChannelTarget target{};
 
-            uint32_t index;
+            const auto target_err = json_get_channel_target(root, &target);
 
-            const auto index_err = json_get_uint32(root, Traits::index_field, &index);
-
-            if (index_err != JsonFieldError::Ok) {
-                return send_field_error(req, request_id, Traits::index_field, index_err);
+            if (target_err != JsonFieldError::Ok) {
+                // ToDo: add better channel error handling
+                return send_field_error(req, request_id, "channel_type || channel", target_err);
             }
 
             float gain_db;
@@ -459,7 +480,7 @@ namespace protocol {
                 return send_field_error(req, request_id, "gain_db", gain_err);
             }
 
-            const auto result = Traits::set_gain(index, gain_db);
+            const auto result = device::set_channel_gain(target, gain_db);
 
             switch (result.error) {
                 case device::DeviceError::Ok:
@@ -473,13 +494,16 @@ namespace protocol {
 
                 case device::DeviceError::InvalidGain:
                     return send_error(req, request_id, "invalid_gain", "gain_db");
+
+                default:
+                    return send_error(req, request_id, "internal_error");
             }
 
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
-                const esp_err_t broadcast_err = broadcast_channel_gain_update<Kind>(
-                    req->handle, result.revision, index, gain_db);
+                const esp_err_t broadcast_err = broadcast_channel_gain_update(
+                    req->handle, result.revision, target, gain_db);
 
                 if (broadcast_err != ESP_OK) {
                     ESP_LOGW(TAG, "State update broadcast failed: %s", esp_err_to_name(broadcast_err));
@@ -501,8 +525,7 @@ namespace protocol {
         };
 
         constexpr std::array COMMANDS{
-            ProtocolCommand{"set_input_gain", handle_set_channel_gain<ChannelKind::Input>},
-            ProtocolCommand{"set_output_gain", handle_set_channel_gain<ChannelKind::Output>},
+            ProtocolCommand{"set_channel_gain", handle_set_channel_gain}
         };
 
         esp_err_t dispatch_command(httpd_req_t *req, uint32_t request_id, const cJSON *root, std::string_view type) {

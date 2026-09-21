@@ -32,6 +32,16 @@ namespace device {
         FilterType type = FilterType::PEAK;
     };
 
+    enum class ChannelKind {
+        Input,
+        Output
+    };
+
+    struct ChannelTarget {
+        ChannelKind kind;
+        size_t index;
+    };
+
     template<size_t PeqBandCount>
     struct ChannelState {
         float gain_db = 0.0f;
@@ -73,6 +83,5 @@ namespace device {
 
     uint32_t get_revision();
 
-    MutationResult set_input_gain(size_t input, float gain_db);
-    MutationResult set_output_gain(size_t output, float gain_db);
+    MutationResult set_channel_gain(ChannelTarget target, float gain_db);
 }
