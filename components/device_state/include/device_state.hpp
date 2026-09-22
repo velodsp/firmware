@@ -84,4 +84,5 @@ namespace device {
     uint32_t get_revision();
 
     MutationResult set_channel_gain(ChannelTarget target, float gain_db);
+    MutationResult set_channel_muted(ChannelTarget target, bool muted);
 }

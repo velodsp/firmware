@@ -93,6 +93,17 @@ namespace protocol {
             return JsonFieldError::Ok;
         }
 
+        JsonFieldError json_get_bool(const cJSON *root, const char *name, bool *out) {
+            const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+
+            if (item == nullptr) return JsonFieldError::Missing;
+
+            if (!cJSON_IsBool(item)) return JsonFieldError::WrongType;
+
+            *out = cJSON_IsTrue(item);
+            return JsonFieldError::Ok;
+        }
+
         const char *filter_type_to_string(device::FilterType type) {
             switch (type) {
                 case device::FilterType::PEAK:
@@ -414,58 +425,113 @@ namespace protocol {
             return "unknown";
         }
 
-        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision,
-                                                device::ChannelTarget target, const float gain_db) {
-            cJSON *root = cJSON_CreateObject();
+        cJSON *create_channel_change(const char *type, device::ChannelTarget target) {
+            cJSON *change = cJSON_CreateObject();
+            if (change == nullptr) return nullptr;
 
+            cJSON_AddStringToObject(change, "type", type);
+            cJSON_AddStringToObject(change, "channel_type", channel_kind_to_string(target.kind));
+            cJSON_AddNumberToObject(change, "channel", target.index);
+
+            return change;
+        }
+
+        cJSON *create_preset_modified_change() {
+            cJSON *change = cJSON_CreateObject();
+            if (change == nullptr) return nullptr;
+
+            cJSON_AddStringToObject(change, "type", "preset_modified");
+            cJSON_AddBoolToObject(change, "value", true);
+
+            return change;
+        }
+
+        esp_err_t broadcast_state_update(httpd_handle_t server, uint32_t revision,
+                                         std::initializer_list<cJSON *> changes) {
+            cJSON *root = cJSON_CreateObject();
             if (root == nullptr) {
+                for (cJSON *change: changes) {
+                    cJSON_Delete(change);
+                }
                 return ESP_ERR_NO_MEM;
             }
 
             cJSON_AddStringToObject(root, "type", "state_update");
             cJSON_AddNumberToObject(root, "revision", revision);
 
-            cJSON *changes = cJSON_AddArrayToObject(root, "changes");
+            cJSON *changes_json = cJSON_AddArrayToObject(root, "changes");
 
-            if (changes == nullptr) {
+            if (changes_json == nullptr) {
                 cJSON_Delete(root);
+
+                for (cJSON *change: changes) {
+                    cJSON_Delete(change);
+                }
+
                 return ESP_ERR_NO_MEM;
             }
 
-            // channel gain
-            {
-                cJSON *change = cJSON_CreateObject();
-
+            for (cJSON *change: changes) {
                 if (change == nullptr) {
                     cJSON_Delete(root);
                     return ESP_ERR_NO_MEM;
                 }
 
-                cJSON_AddStringToObject(change, "type", "channel_gain");
-                cJSON_AddStringToObject(change, "channel_type", channel_kind_to_string(target.kind));
-                cJSON_AddNumberToObject(change, "channel", target.index);
-                cJSON_AddNumberToObject(change, "gain_db", gain_db);
-                cJSON_AddItemToArray(changes, change);
-            }
-
-            // preset_modified
-            {
-                cJSON *change = cJSON_CreateObject();
-
-                if (change == nullptr) {
-                    cJSON_Delete(root);
-                    return ESP_ERR_NO_MEM;
-                }
-
-                cJSON_AddStringToObject(change, "type", "preset_modified");
-                cJSON_AddBoolToObject(change, "value", true);
-                cJSON_AddItemToArray(changes, change);
+                cJSON_AddItemToArray(changes_json, change);
             }
 
             const esp_err_t err = broadcast_json(server, root);
             cJSON_Delete(root);
 
             return err;
+        }
+
+        cJSON *create_channel_gain_change(device::ChannelTarget target, float gain_db) {
+            cJSON *change = create_channel_change("channel_gain", target);
+
+            if (change == nullptr) {
+                return nullptr;
+            }
+
+            cJSON_AddNumberToObject(change, "gain_db", gain_db);
+            return change;
+        }
+
+        cJSON *create_channel_mute_change(device::ChannelTarget target, bool muted) {
+            cJSON *change = create_channel_change("channel_muted", target);
+
+            if (change == nullptr) {
+                return nullptr;
+            }
+
+            cJSON_AddBoolToObject(change, "muted", muted);
+            return change;
+        }
+
+        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision,
+                                                device::ChannelTarget target, const float gain_db) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_gain_change(target, gain_db),
+                                              create_preset_modified_change()
+                                          });
+        }
+
+        esp_err_t broadcast_channel_mute_update(httpd_handle_t server, const uint32_t revision,
+                                                device::ChannelTarget target, const bool muted) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_mute_change(target, muted),
+                                              create_preset_modified_change()
+                                          });
+        }
+
+        void log_broadcast_error(esp_err_t err) {
+            if (err != ESP_OK) {
+                ESP_LOGW(
+                    TAG,
+                    "State update broadcast failed: %s",
+                    esp_err_to_name(err)
+                );
+            }
         }
 
         esp_err_t handle_set_channel_gain(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
@@ -506,12 +572,42 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
-                const esp_err_t broadcast_err = broadcast_channel_gain_update(
-                    req->handle, result.revision, target, gain_db);
+                log_broadcast_error(
+                    broadcast_channel_gain_update(
+                        req->handle, result.revision, target, gain_db
+                    )
+                );
+            }
 
-                if (broadcast_err != ESP_OK) {
-                    ESP_LOGW(TAG, "State update broadcast failed: %s", esp_err_to_name(broadcast_err));
-                }
+            return response_err;
+        }
+
+        esp_err_t handle_set_channel_muted(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
+            device::ChannelTarget target{};
+
+            const auto target_result = json_get_channel_target(root, &target);
+
+            if (target_result.error != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, target_result.field, target_result.error);
+            }
+
+            bool muted;
+            const auto muted_err = json_get_bool(root, "muted", &muted);
+
+            if (muted_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "muted", muted_err);
+            }
+
+            const auto result = device::set_channel_muted(target, muted);
+
+            const esp_err_t response_err = send_ok(req, request_id, result.revision);
+
+            if (result.changed) {
+                log_broadcast_error(
+                    broadcast_channel_mute_update(
+                        req->handle, result.revision, target, muted
+                    )
+                );
             }
 
             return response_err;
@@ -529,7 +625,8 @@ namespace protocol {
         };
 
         constexpr std::array COMMANDS{
-            ProtocolCommand{"set_channel_gain", handle_set_channel_gain}
+            ProtocolCommand{"set_channel_gain", handle_set_channel_gain},
+            ProtocolCommand{"set_channel_muted", handle_set_channel_muted}
         };
 
         esp_err_t dispatch_command(httpd_req_t *req, uint32_t request_id, const cJSON *root, std::string_view type) {

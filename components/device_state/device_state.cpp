@@ -88,4 +88,16 @@ namespace device {
             return changed_result();
         });
     }
+
+    MutationResult set_channel_muted(const ChannelTarget target, const bool muted) {
+        return with_channel(target, [muted](auto &channel) {
+            if (channel.muted == muted) {
+                return unchanged_result();
+            }
+
+            channel.muted = muted;
+
+            return changed_result();
+        });
+    }
 }
