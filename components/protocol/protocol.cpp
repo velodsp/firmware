@@ -27,6 +27,11 @@ namespace protocol {
             InvalidChannel
         };
 
+        struct JsonFieldResult {
+            JsonFieldError error;
+            const char *field;
+        };
+
         JsonFieldError json_get_int(const cJSON *root, const char *name, int *out) {
             const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
 
@@ -360,15 +365,15 @@ namespace protocol {
             return err;
         }
 
-        JsonFieldError json_get_channel_target(const cJSON *root, device::ChannelTarget *out) {
+        JsonFieldResult json_get_channel_target(const cJSON *root, device::ChannelTarget *out) {
             const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "channel_type");
 
             if (type == nullptr) {
-                return JsonFieldError::Missing;
+                return {.error = JsonFieldError::Missing, .field = "channel_type"};
             }
 
             if (!cJSON_IsString(type)) {
-                return JsonFieldError::WrongType;
+                return {.error = JsonFieldError::WrongType, .field = "channel_type"};
             }
 
             device::ChannelKind kind;
@@ -378,7 +383,7 @@ namespace protocol {
             } else if (strcmp(type->valuestring, "output") == 0) {
                 kind = device::ChannelKind::Output;
             } else {
-                return JsonFieldError::InvalidChannel;
+                return {JsonFieldError::InvalidChannel, "channel_type"};
             }
 
             uint32_t index;
@@ -386,7 +391,7 @@ namespace protocol {
             const auto index_error = json_get_uint32(root, "channel", &index);
 
             if (index_error != JsonFieldError::Ok) {
-                return index_error;
+                return {index_error, "channel"};
             }
 
             *out = {
@@ -394,7 +399,7 @@ namespace protocol {
                 .index = index
             };
 
-            return JsonFieldError::Ok;
+            return {JsonFieldError::Ok, nullptr};
         }
 
         const char *channel_kind_to_string(device::ChannelKind kind) {
@@ -466,11 +471,10 @@ namespace protocol {
         esp_err_t handle_set_channel_gain(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
             device::ChannelTarget target{};
 
-            const auto target_err = json_get_channel_target(root, &target);
+            const auto target_result = json_get_channel_target(root, &target);
 
-            if (target_err != JsonFieldError::Ok) {
-                // ToDo: add better channel error handling
-                return send_field_error(req, request_id, "channel_type || channel", target_err);
+            if (target_result.error != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, target_result.field, target_result.error);
             }
 
             float gain_db;
