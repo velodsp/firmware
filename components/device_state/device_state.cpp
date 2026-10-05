@@ -100,4 +100,16 @@ namespace device {
             return changed_result();
         });
     }
+
+    MutationResult set_channel_peq_enabled(const ChannelTarget target, const bool enabled) {
+        return with_channel(target, [enabled](auto &channel) {
+            if (channel.peq.enabled == enabled) {
+                return unchanged_result();
+            }
+
+            channel.peq.enabled = enabled;
+
+            return changed_result();
+        });
+    }
 }

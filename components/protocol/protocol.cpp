@@ -134,12 +134,19 @@ namespace protocol {
             cJSON_AddNumberToObject(obj, "gain_db", output->gain_db);
             cJSON_AddBoolToObject(obj, "muted", output->muted);
 
-            cJSON *peq = cJSON_AddArrayToObject(obj, "peq");
+            cJSON *peq = cJSON_AddObjectToObject(obj, "peq");
             if (peq == nullptr) {
                 cJSON_Delete(obj);
                 return nullptr;
             }
-            for (const auto &i: output->peq) {
+
+            cJSON_AddBoolToObject(peq, "enabled", output->peq.enabled);
+            cJSON *bands = cJSON_AddArrayToObject(peq, "bands");
+            if (bands == nullptr) {
+                cJSON_Delete(obj);
+                return nullptr;
+            }
+            for (const auto &i: output->peq.bands) {
                 cJSON *band = serialize_peq_band(&i);
 
                 if (band == nullptr) {
@@ -147,7 +154,7 @@ namespace protocol {
                     return nullptr;
                 }
 
-                cJSON_AddItemToArray(peq, band);
+                cJSON_AddItemToArray(bands, band);
             }
 
             return obj;
@@ -160,12 +167,19 @@ namespace protocol {
             cJSON_AddNumberToObject(obj, "gain_db", input->gain_db);
             cJSON_AddBoolToObject(obj, "muted", input->muted);
 
-            cJSON *peq = cJSON_AddArrayToObject(obj, "peq");
+            cJSON *peq = cJSON_AddObjectToObject(obj, "peq");
             if (peq == nullptr) {
                 cJSON_Delete(obj);
                 return nullptr;
             }
-            for (const auto &i: input->peq) {
+
+            cJSON_AddBoolToObject(peq, "enabled", input->peq.enabled);
+            cJSON *bands = cJSON_AddArrayToObject(peq, "bands");
+            if (bands == nullptr) {
+                cJSON_Delete(obj);
+                return nullptr;
+            }
+            for (const auto &i: input->peq.bands) {
                 cJSON *band = serialize_peq_band(&i);
 
                 if (band == nullptr) {
@@ -173,7 +187,7 @@ namespace protocol {
                     return nullptr;
                 }
 
-                cJSON_AddItemToArray(peq, band);
+                cJSON_AddItemToArray(bands, band);
             }
 
             return obj;
@@ -497,6 +511,14 @@ namespace protocol {
             return change;
         }
 
+        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision,
+                                                device::ChannelTarget target, const float gain_db) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_gain_change(target, gain_db),
+                                              create_preset_modified_change()
+                                          });
+        }
+
         cJSON *create_channel_mute_change(device::ChannelTarget target, bool muted) {
             cJSON *change = create_channel_change("channel_muted", target);
 
@@ -508,18 +530,29 @@ namespace protocol {
             return change;
         }
 
-        esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision,
-                                                device::ChannelTarget target, const float gain_db) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_gain_change(target, gain_db),
-                                              create_preset_modified_change()
-                                          });
-        }
-
         esp_err_t broadcast_channel_mute_update(httpd_handle_t server, const uint32_t revision,
                                                 device::ChannelTarget target, const bool muted) {
             return broadcast_state_update(server, revision, {
                                               create_channel_mute_change(target, muted),
+                                              create_preset_modified_change()
+                                          });
+        }
+
+        cJSON *create_channel_peq_enabled_change(device::ChannelTarget target, bool enabled) {
+            cJSON *change = create_channel_change("channel_peq_enabled", target);
+
+            if (change == nullptr) {
+                return nullptr;
+            }
+
+            cJSON_AddBoolToObject(change, "enabled", enabled);
+            return change;
+        }
+
+        esp_err_t broadcast_channel_peq_enabled_update(httpd_handle_t server, const uint32_t revision,
+                                               device::ChannelTarget target, const bool enabled) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_peq_enabled_change(target, enabled),
                                               create_preset_modified_change()
                                           });
         }
@@ -613,6 +646,36 @@ namespace protocol {
             return response_err;
         }
 
+        esp_err_t handle_set_channel_peq_enabled(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
+            device::ChannelTarget target{};
+
+            const auto target_result = json_get_channel_target(root, &target);
+
+            if (target_result.error != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, target_result.field, target_result.error);
+            }
+
+            bool enabled;
+
+            if (const auto field_err = json_get_bool(root, "enabled", &enabled); field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "enabled", field_err);
+            }
+
+            const auto result = device::set_channel_peq_enabled(target, enabled);
+
+            const esp_err_t response_err = send_ok(req, request_id, result.revision);
+
+            if (result.changed) {
+                log_broadcast_error(
+                    broadcast_channel_peq_enabled_update(
+                        req->handle, result.revision, target, enabled
+                    )
+                );
+            }
+
+            return response_err;
+        }
+
         using ProtocolHandler = esp_err_t (*)(
             httpd_req_t *req,
             uint32_t request_id,
@@ -626,7 +689,8 @@ namespace protocol {
 
         constexpr std::array COMMANDS{
             ProtocolCommand{"set_channel_gain", handle_set_channel_gain},
-            ProtocolCommand{"set_channel_muted", handle_set_channel_muted}
+            ProtocolCommand{"set_channel_muted", handle_set_channel_muted},
+            ProtocolCommand{"set_channel_peq_enabled", handle_set_channel_peq_enabled},
         };
 
         esp_err_t dispatch_command(httpd_req_t *req, uint32_t request_id, const cJSON *root, std::string_view type) {

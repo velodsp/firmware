@@ -43,11 +43,17 @@ namespace device {
     };
 
     template<size_t PeqBandCount>
+    struct Peq {
+        bool enabled = false;
+        std::array<PeqBand, PeqBandCount> bands{};
+    };
+
+    template<size_t PeqBandCount>
     struct ChannelState {
         float gain_db = 0.0f;
         bool muted = false;
 
-        std::array<PeqBand, PeqBandCount> peq{};
+        Peq<PeqBandCount> peq{};
     };
 
     struct InputState : ChannelState<InputPeqBands> {
@@ -85,4 +91,5 @@ namespace device {
 
     MutationResult set_channel_gain(ChannelTarget target, float gain_db);
     MutationResult set_channel_muted(ChannelTarget target, bool muted);
+    MutationResult set_channel_peq_enabled(ChannelTarget target, bool enabled);
 }
