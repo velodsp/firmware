@@ -24,6 +24,7 @@ namespace protocol {
             NotFinite,
             NotInteger,
             OutOfRange,
+            InvalidValue,
             InvalidChannel
         };
 
@@ -31,6 +32,24 @@ namespace protocol {
             JsonFieldError error;
             const char *field;
         };
+
+        const char *filter_type_to_string(device::FilterType type) {
+            switch (type) {
+                case device::FilterType::PEAK:
+                    return "peak";
+
+                default:
+                    return "unknown";
+            }
+        }
+
+        std::optional<device::FilterType> filter_type_from_string(const std::string_view value) {
+            if (value == "peak") {
+                return device::FilterType::PEAK;
+            }
+
+            return std::nullopt;
+        }
 
         JsonFieldError json_get_int(const cJSON *root, const char *name, int *out) {
             const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
@@ -57,6 +76,28 @@ namespace protocol {
             const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
 
             if (item == nullptr) return JsonFieldError::Missing;
+
+            if (!cJSON_IsNumber(item)) return JsonFieldError::WrongType;
+
+            const double value = item->valuedouble;
+
+            if (!std::isfinite(value)) return JsonFieldError::NotFinite;
+
+            if (value < std::numeric_limits<float>::lowest() || value > std::numeric_limits<float>::max()) {
+                return JsonFieldError::OutOfRange;
+            }
+
+            *out = static_cast<float>(value);
+            return JsonFieldError::Ok;
+        }
+
+        JsonFieldError json_get_optional_float(const cJSON *root, const char *name, std::optional<float> *out) {
+            const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+
+            if (item == nullptr) {
+                out->reset();
+                return JsonFieldError::Ok;
+            }
 
             if (!cJSON_IsNumber(item)) return JsonFieldError::WrongType;
 
@@ -104,14 +145,41 @@ namespace protocol {
             return JsonFieldError::Ok;
         }
 
-        const char *filter_type_to_string(device::FilterType type) {
-            switch (type) {
-                case device::FilterType::PEAK:
-                    return "peak";
+        JsonFieldError json_get_optional_bool(const cJSON *root, const char *name, std::optional<bool> *out) {
+            const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
 
-                default:
-                    return "unknown";
+            if (item == nullptr) {
+                out->reset();
+                return JsonFieldError::Ok;
             }
+
+            if (!cJSON_IsBool(item)) return JsonFieldError::WrongType;
+
+            *out = cJSON_IsTrue(item);
+            return JsonFieldError::Ok;
+        }
+
+        JsonFieldError json_get_optional_filter_type(const cJSON *root, const char *name,
+                                                     std::optional<device::FilterType> *out) {
+            const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+
+            if (item == nullptr) {
+                out->reset();
+                return JsonFieldError::Ok;
+            }
+
+            if (!cJSON_IsString(item)) {
+                return JsonFieldError::WrongType;
+            }
+
+            const auto type = filter_type_from_string(item->valuestring);
+
+            if (!type.has_value()) {
+                return JsonFieldError::InvalidValue;
+            }
+
+            *out = *type;
+            return JsonFieldError::Ok;
         }
 
         cJSON *serialize_peq_band(const device::PeqBand *band) {
@@ -359,6 +427,7 @@ namespace protocol {
 
                 case JsonFieldError::NotFinite:
                 case JsonFieldError::OutOfRange:
+                case JsonFieldError::InvalidValue:
                     return send_error(req, request_id, "invalid_value", field);
 
                 case JsonFieldError::NotInteger:
@@ -550,9 +619,37 @@ namespace protocol {
         }
 
         esp_err_t broadcast_channel_peq_enabled_update(httpd_handle_t server, const uint32_t revision,
-                                               device::ChannelTarget target, const bool enabled) {
+                                                       device::ChannelTarget target, const bool enabled) {
             return broadcast_state_update(server, revision, {
                                               create_channel_peq_enabled_change(target, enabled),
+                                              create_preset_modified_change()
+                                          });
+        }
+
+        cJSON *create_channel_peq_band_change(device::ChannelTarget target, uint32_t band_index, device::PeqBand band) {
+            cJSON *change = create_channel_change("channel_peq_band_changed", target);
+
+            if (change == nullptr) {
+                return nullptr;
+            }
+
+            cJSON_AddNumberToObject(change, "band", band_index);
+
+            cJSON *value = cJSON_AddObjectToObject(change, "value");
+            cJSON_AddBoolToObject(value, "enabled", band.enabled);
+            cJSON_AddNumberToObject(value, "frequency_hz", band.frequency_hz);
+            cJSON_AddNumberToObject(value, "q", band.q);
+            cJSON_AddNumberToObject(value, "gain_db", band.gain_db);
+            cJSON_AddStringToObject(value, "type", filter_type_to_string(band.type));
+
+            return change;
+        }
+
+        esp_err_t broadcast_channel_peq_band_update(httpd_handle_t server, const uint32_t revision,
+                                                       device::ChannelTarget target, uint32_t band_index,
+                                                       const device::PeqBand &band) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_peq_band_change(target, band_index, band),
                                               create_preset_modified_change()
                                           });
         }
@@ -676,6 +773,89 @@ namespace protocol {
             return response_err;
         }
 
+        esp_err_t handle_set_channel_peq_band(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
+            device::ChannelTarget target{};
+
+            const auto target_result = json_get_channel_target(root, &target);
+
+            if (target_result.error != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, target_result.field, target_result.error);
+            }
+
+            uint32_t band_index;
+
+            if (const auto field_err = json_get_uint32(root, "band", &band_index); field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "band", field_err);
+            }
+
+            device::PeqBandPatch patch{};
+
+            if (const auto field_err = json_get_optional_bool(root, "enabled", &patch.enabled);
+                field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "enabled", field_err);
+            }
+            if (const auto field_err = json_get_optional_float(root, "frequency_hz", &patch.frequency_hz);
+                field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "frequency_hz", field_err);
+            }
+            if (const auto field_err = json_get_optional_float(root, "q", &patch.q); field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "q", field_err);
+            }
+            if (const auto field_err = json_get_optional_float(root, "gain_db", &patch.gain_db);
+                field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "gain_db", field_err);
+            }
+            if (const auto field_err = json_get_optional_filter_type(root, "filter_type", &patch.type);
+                field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "filter_type", field_err);
+            }
+
+            device::PeqBand band_result{};
+
+            const auto result = device::set_channel_peq_band(target, band_index, patch, band_result);
+
+            switch (result.error) {
+                case device::DeviceError::Ok:
+                    break;
+
+                case device::DeviceError::InvalidPeqBand:
+                    return send_error(req, request_id, "invalid_peq_band", "band");
+
+                case device::DeviceError::InvalidPeqFrequency:
+                    return send_error(req, request_id, "invalid_frequency", "frequency_hz");
+
+                case device::DeviceError::PeqFrequencyOutOfRange:
+                    return send_error(req, request_id, "out_of_range", "frequency_hz");
+
+                case device::DeviceError::InvalidPeqQ:
+                    return send_error(req, request_id, "invalid_q", "q");
+
+                case device::DeviceError::PeqQOutOfRange:
+                    return send_error(req, request_id, "out_of_range", "q");
+
+                case device::DeviceError::InvalidPeqGain:
+                    return send_error(req, request_id, "invalid_gain", "gain_db");
+
+                case device::DeviceError::PeqGainOutOfRange:
+                    return send_error(req, request_id, "out_of_range", "gain_db");
+
+                default:
+                    return send_error(req, request_id, "internal_error");
+            }
+
+            const esp_err_t response_err = send_ok(req, request_id, result.revision);
+
+            if (result.changed) {
+                log_broadcast_error(
+                    broadcast_channel_peq_band_update(
+                        req->handle, result.revision, target, band_index, band_result
+                    )
+                );
+            }
+
+            return response_err;
+        }
+
         using ProtocolHandler = esp_err_t (*)(
             httpd_req_t *req,
             uint32_t request_id,
@@ -691,6 +871,7 @@ namespace protocol {
             ProtocolCommand{"set_channel_gain", handle_set_channel_gain},
             ProtocolCommand{"set_channel_muted", handle_set_channel_muted},
             ProtocolCommand{"set_channel_peq_enabled", handle_set_channel_peq_enabled},
+            ProtocolCommand{"set_channel_peq_band", handle_set_channel_peq_band}
         };
 
         esp_err_t dispatch_command(httpd_req_t *req, uint32_t request_id, const cJSON *root, std::string_view type) {

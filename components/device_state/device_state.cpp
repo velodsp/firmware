@@ -5,9 +5,6 @@
 
 namespace device {
     namespace {
-        constexpr float ChannelGainMinDb = -80.0f;
-        constexpr float ChannelGainMaxDb = 12.0f;
-
         State s_state{};
         uint32_t s_revision = 0;
 
@@ -110,6 +107,65 @@ namespace device {
             channel.peq.enabled = enabled;
 
             return changed_result();
+        });
+    }
+
+    MutationResult set_channel_peq_band(const ChannelTarget target, size_t band_index, const PeqBandPatch &patch, PeqBand &band_result) {
+        return with_channel(target, [&](auto &channel) {
+            if (band_index >= channel.peq.bands.size()) {
+                return error_result(DeviceError::InvalidPeqBand);
+            }
+
+            auto &band = channel.peq.bands[band_index];
+
+            if (patch.frequency_hz) {
+                if (!std::isfinite(*patch.frequency_hz)) {
+                    return error_result(DeviceError::InvalidPeqFrequency);
+                }
+
+                if (*patch.frequency_hz < PeqFrequencyMinHz || *patch.frequency_hz > PeqFrequencyMaxHz) {
+                    return error_result(DeviceError::PeqFrequencyOutOfRange);
+                }
+            }
+
+            if (patch.q) {
+                if (!std::isfinite(*patch.q)) {
+                    return error_result(DeviceError::InvalidPeqQ);
+                }
+
+                if (*patch.q < PeqQMin || *patch.q > PeqQMax) {
+                    return error_result(DeviceError::PeqQOutOfRange);
+                }
+            }
+
+            if (patch.gain_db) {
+                if (!std::isfinite(*patch.gain_db)) {
+                    return error_result(DeviceError::InvalidPeqGain);
+                }
+
+                if (*patch.gain_db < PeqGainDbMin || *patch.gain_db > PeqGainDbMax) {
+                    return error_result(DeviceError::PeqGainOutOfRange);
+                }
+            }
+
+            bool changed = false;
+
+            auto set_if_changed = [&](auto &dst, const auto &value) {
+                if (value && dst != *value) {
+                    dst = *value;
+                    changed = true;
+                }
+            };
+
+            set_if_changed(band.enabled, patch.enabled);
+            set_if_changed(band.frequency_hz, patch.frequency_hz);
+            set_if_changed(band.q, patch.q);
+            set_if_changed(band.gain_db, patch.gain_db);
+            set_if_changed(band.type, patch.type);
+
+            band_result = band;
+
+            return changed ? changed_result() : unchanged_result();
         });
     }
 }
