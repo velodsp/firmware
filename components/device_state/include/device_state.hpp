@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "esp_err.h"
 
@@ -34,7 +35,8 @@ namespace device {
         PeqQOutOfRange,
         InvalidPeqGain,
         PeqGainOutOfRange,
-        InvalidPeqFilter
+        InvalidPeqFilter,
+        MaxPeqBandsReached
     };
 
     enum class FilterType {
@@ -42,7 +44,7 @@ namespace device {
     };
 
     struct PeqBand {
-        bool enabled = false;
+        bool enabled = true;
         float frequency_hz = 1000.0f;
         float gain_db = 0.0f;
         float q = 1.0f;
@@ -59,10 +61,12 @@ namespace device {
         size_t index;
     };
 
-    template<size_t PeqBandCount>
+    template<size_t MaxPeqBandCount>
     struct Peq {
+        static constexpr size_t MaxBands = MaxPeqBandCount;
+
         bool enabled = false;
-        std::array<PeqBand, PeqBandCount> bands{};
+        std::vector<PeqBand> bands{};
     };
 
     template<size_t PeqBandCount>
@@ -118,4 +122,6 @@ namespace device {
     MutationResult set_channel_muted(ChannelTarget target, bool muted);
     MutationResult set_channel_peq_enabled(ChannelTarget target, bool enabled);
     MutationResult set_channel_peq_band(ChannelTarget target, size_t band_index, const PeqBandPatch &patch, PeqBand &band_result);
+    MutationResult add_channel_peq_band(ChannelTarget target, PeqBand &band_result, size_t &band_index);
+    MutationResult delete_channel_peq_band(ChannelTarget target, size_t band_index);
 }

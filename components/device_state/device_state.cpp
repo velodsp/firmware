@@ -1,5 +1,7 @@
 #include "device_state.hpp"
 #include <cmath>
+#include <type_traits>
+#include <vector>
 
 #include "esp_err.h"
 
@@ -166,6 +168,36 @@ namespace device {
             band_result = band;
 
             return changed ? changed_result() : unchanged_result();
+        });
+    }
+
+    MutationResult add_channel_peq_band(ChannelTarget target, PeqBand &band_result, size_t &band_index) {
+        return with_channel(target, [&](auto &channel) {
+            auto &peq = channel.peq;
+
+            if (peq.bands.size() >= std::remove_reference_t<decltype(peq)>::MaxBands) {
+                return error_result(DeviceError::MaxPeqBandsReached);
+            }
+
+            peq.bands.emplace_back();
+            band_result = peq.bands.back();
+            band_index = peq.bands.size() - 1;
+
+            return changed_result();
+        });
+    }
+
+    MutationResult delete_channel_peq_band(ChannelTarget target, size_t band_index) {
+        return with_channel(target, [&](auto &channel) {
+            auto& bands = channel.peq.bands;
+
+            if (band_index >= bands.size()) {
+                return error_result(DeviceError::InvalidPeqBand);
+            }
+
+            bands.erase(bands.begin() + band_index);
+
+            return changed_result();
         });
     }
 }

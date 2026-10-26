@@ -626,8 +626,8 @@ namespace protocol {
                                           });
         }
 
-        cJSON *create_channel_peq_band_change(device::ChannelTarget target, uint32_t band_index, device::PeqBand band) {
-            cJSON *change = create_channel_change("channel_peq_band_changed", target);
+        cJSON *create_channel_peq_band_event(const char* event_type, device::ChannelTarget target, uint32_t band_index, device::PeqBand band) {
+            cJSON *change = create_channel_change(event_type, target);
 
             if (change == nullptr) {
                 return nullptr;
@@ -645,11 +645,39 @@ namespace protocol {
             return change;
         }
 
-        esp_err_t broadcast_channel_peq_band_update(httpd_handle_t server, const uint32_t revision,
-                                                       device::ChannelTarget target, uint32_t band_index,
-                                                       const device::PeqBand &band) {
+        esp_err_t broadcast_channel_peq_band_change_update(httpd_handle_t server, const uint32_t revision,
+                                                    device::ChannelTarget target, uint32_t band_index,
+                                                    const device::PeqBand &band) {
             return broadcast_state_update(server, revision, {
-                                              create_channel_peq_band_change(target, band_index, band),
+                                              create_channel_peq_band_event("channel_peq_band_changed", target, band_index, band),
+                                              create_preset_modified_change()
+                                          });
+        }
+
+        esp_err_t broadcast_channel_peq_band_add_update(httpd_handle_t server, const uint32_t revision,
+                                                    device::ChannelTarget target, uint32_t band_index,
+                                                    const device::PeqBand &band) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_peq_band_event("channel_peq_band_added", target, band_index, band),
+                                              create_preset_modified_change()
+                                          });
+        }
+
+        cJSON *create_channel_peq_band_deletion(device::ChannelTarget target, uint32_t band_index) {
+            cJSON *change = create_channel_change("channel_peq_band_deleted", target);
+            if (change == nullptr) {
+                return nullptr;
+            }
+
+            cJSON_AddNumberToObject(change, "band", band_index);
+
+            return change;
+        }
+
+        esp_err_t broadcast_channel_peq_band_delete_update(httpd_handle_t server, const uint32_t revision,
+                                                    device::ChannelTarget target, uint32_t band_index) {
+            return broadcast_state_update(server, revision, {
+                                              create_channel_peq_band_deletion(target, band_index),
                                               create_preset_modified_change()
                                           });
         }
@@ -847,8 +875,85 @@ namespace protocol {
 
             if (result.changed) {
                 log_broadcast_error(
-                    broadcast_channel_peq_band_update(
+                    broadcast_channel_peq_band_change_update(
                         req->handle, result.revision, target, band_index, band_result
+                    )
+                );
+            }
+
+            return response_err;
+        }
+
+        esp_err_t handle_add_channel_peq_band(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
+            device::ChannelTarget target{};
+
+            const auto target_result = json_get_channel_target(root, &target);
+
+            if (target_result.error != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, target_result.field, target_result.error);
+            }
+
+            device::PeqBand band_result{};
+            size_t band_index;
+
+            const auto result = device::add_channel_peq_band(target, band_result, band_index);
+
+            switch (result.error) {
+                case device::DeviceError::Ok:
+                    break;
+                case device::DeviceError::MaxPeqBandsReached:
+                    return send_error(req, request_id, "max_peq_bands");
+                default:
+                    return send_error(req, request_id, "internal_error");
+            }
+
+            const esp_err_t response_err = send_ok(req, request_id, result.revision);
+
+            if (result.changed) {
+                log_broadcast_error(
+                    broadcast_channel_peq_band_add_update(
+                        req->handle, result.revision, target, band_index, band_result
+                    )
+                );
+            }
+
+            return response_err;
+        }
+
+        esp_err_t handle_delete_channel_peq_band(httpd_req_t *req, const uint32_t request_id, const cJSON *root) {
+            device::ChannelTarget target{};
+
+            const auto target_result = json_get_channel_target(root, &target);
+
+            if (target_result.error != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, target_result.field, target_result.error);
+            }
+
+            uint32_t band_index;
+
+            if (const auto field_err = json_get_uint32(root, "band", &band_index); field_err != JsonFieldError::Ok) {
+                return send_field_error(req, request_id, "band", field_err);
+            }
+
+            const auto result = device::delete_channel_peq_band(target, band_index);
+
+            switch (result.error) {
+                case device::DeviceError::Ok:
+                    break;
+
+                case device::DeviceError::InvalidPeqBand:
+                    return send_error(req, request_id, "invalid_peq_band", "band");
+
+                default:
+                    return send_error(req, request_id, "internal_error");
+            }
+
+            const esp_err_t response_err = send_ok(req, request_id, result.revision);
+
+            if (result.changed) {
+                log_broadcast_error(
+                    broadcast_channel_peq_band_delete_update(
+                        req->handle, result.revision, target, band_index
                     )
                 );
             }
@@ -871,7 +976,9 @@ namespace protocol {
             ProtocolCommand{"set_channel_gain", handle_set_channel_gain},
             ProtocolCommand{"set_channel_muted", handle_set_channel_muted},
             ProtocolCommand{"set_channel_peq_enabled", handle_set_channel_peq_enabled},
-            ProtocolCommand{"set_channel_peq_band", handle_set_channel_peq_band}
+            ProtocolCommand{"set_channel_peq_band", handle_set_channel_peq_band},
+            ProtocolCommand{"add_channel_peq_band", handle_add_channel_peq_band},
+            ProtocolCommand{"delete_channel_peq_band", handle_delete_channel_peq_band}
         };
 
         esp_err_t dispatch_command(httpd_req_t *req, uint32_t request_id, const cJSON *root, std::string_view type) {
