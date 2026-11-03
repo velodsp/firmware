@@ -181,6 +181,7 @@ namespace device {
 
             peq.bands.emplace_back();
             band_result = peq.bands.back();
+            band_result.enabled = true;
             band_index = peq.bands.size() - 1;
 
             return changed_result();

@@ -13,6 +13,8 @@ namespace device {
     constexpr size_t OutputCount = 8;
     constexpr size_t InputPeqBands = 16;
     constexpr size_t OutputPeqBands = 24;
+    constexpr size_t InputPeqDefaultBands = 8;
+    constexpr size_t OutputPeqDefaultBands = 12;
     constexpr uint8_t InvalidPreset = std::numeric_limits<uint8_t>::max();
     constexpr float ChannelGainMinDb = -80.0f;
     constexpr float ChannelGainMaxDb = 12.0f;
@@ -44,7 +46,7 @@ namespace device {
     };
 
     struct PeqBand {
-        bool enabled = true;
+        bool enabled = false;
         float frequency_hz = 1000.0f;
         float gain_db = 0.0f;
         float q = 1.0f;
@@ -61,26 +63,29 @@ namespace device {
         size_t index;
     };
 
-    template<size_t MaxPeqBandCount>
+    template<size_t MaxPeqBandCount, size_t DefaultPeqBandCount>
     struct Peq {
+        static_assert(DefaultPeqBandCount <= MaxPeqBandCount);
+
         static constexpr size_t MaxBands = MaxPeqBandCount;
+        static constexpr size_t DefaultBands = DefaultPeqBandCount;
 
         bool enabled = false;
-        std::vector<PeqBand> bands{};
+        std::vector<PeqBand> bands = std::vector<PeqBand>(DefaultBands);
     };
 
-    template<size_t PeqBandCount>
+    template<typename PeqType>
     struct ChannelState {
         float gain_db = 0.0f;
         bool muted = false;
 
-        Peq<PeqBandCount> peq{};
+        PeqType peq{};
     };
 
-    struct InputState : ChannelState<InputPeqBands> {
+    struct InputState : ChannelState<Peq<InputPeqBands, InputPeqDefaultBands>> {
     };
 
-    struct OutputState : ChannelState<OutputPeqBands> {
+    struct OutputState : ChannelState<Peq<OutputPeqBands, OutputPeqDefaultBands>> {
     };
 
     struct DspConfig {
