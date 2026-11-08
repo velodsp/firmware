@@ -71,7 +71,10 @@ namespace device {
         static constexpr size_t DefaultBands = DefaultPeqBandCount;
 
         bool enabled = false;
-        std::vector<PeqBand> bands = std::vector<PeqBand>(DefaultBands);
+
+        size_t band_count = DefaultBands;
+
+        std::array<PeqBand, MaxBands> bands{};
     };
 
     template<typename PeqType>

@@ -175,14 +175,17 @@ namespace device {
         return with_channel(target, [&](auto &channel) {
             auto &peq = channel.peq;
 
-            if (peq.bands.size() >= std::remove_reference_t<decltype(peq)>::MaxBands) {
+            if (peq.band_count >= std::remove_reference_t<decltype(peq)>::MaxBands) {
                 return error_result(DeviceError::MaxPeqBandsReached);
             }
 
-            peq.bands.emplace_back();
-            band_result = peq.bands.back();
-            band_result.enabled = true;
-            band_index = peq.bands.size() - 1;
+            band_index = peq.band_count;
+
+            peq.bands[band_index] = PeqBand{};
+            peq.bands[band_index].enabled = true;
+            ++peq.band_count;
+
+            band_result = peq.bands[band_index];
 
             return changed_result();
         });
@@ -190,13 +193,19 @@ namespace device {
 
     MutationResult delete_channel_peq_band(ChannelTarget target, size_t band_index) {
         return with_channel(target, [&](auto &channel) {
-            auto& bands = channel.peq.bands;
+            auto &peq = channel.peq;
 
-            if (band_index >= bands.size()) {
+            if (band_index >= peq.band_count) {
                 return error_result(DeviceError::InvalidPeqBand);
             }
 
-            bands.erase(bands.begin() + band_index);
+            for (size_t i = band_index; i + 1 < peq.band_count; ++i) {
+                peq.bands[i] = peq.bands[i + 1];
+            }
+
+            --peq.band_count;
+
+            peq.bands[peq.band_count] = PeqBand{};
 
             return changed_result();
         });

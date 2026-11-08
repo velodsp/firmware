@@ -214,8 +214,8 @@ namespace protocol {
                 cJSON_Delete(obj);
                 return nullptr;
             }
-            for (const auto &i: output->peq.bands) {
-                cJSON *band = serialize_peq_band(&i);
+            for (size_t i = 0; i < output->peq.band_count; ++i) {
+                const auto& band = serialize_peq_band(&output->peq.bands[i]);
 
                 if (band == nullptr) {
                     cJSON_Delete(obj);
@@ -247,8 +247,8 @@ namespace protocol {
                 cJSON_Delete(obj);
                 return nullptr;
             }
-            for (const auto &i: input->peq.bands) {
-                cJSON *band = serialize_peq_band(&i);
+            for (size_t i = 0; i < input->peq.band_count; ++i) {
+                const auto& band = serialize_peq_band(&input->peq.bands[i]);
 
                 if (band == nullptr) {
                     cJSON_Delete(obj);
