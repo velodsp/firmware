@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string_view>
 #include <cinttypes>
+#include <memory>
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -16,6 +17,24 @@
 namespace protocol {
     namespace {
         constexpr char TAG[] = "protocol";
+
+        using JsonPtr = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+
+        JsonPtr make_json(cJSON *json) {
+            return JsonPtr(json, &cJSON_Delete);
+        }
+
+#define JSON_CHECK_NULL(expr) \
+    do { \
+        if (!(expr)) \
+            return nullptr; \
+    } while (0)
+
+#define JSON_CHECK_ERR(expr) \
+    do { \
+        if (!(expr)) \
+            return ESP_ERR_NO_MEM; \
+    } while (0)
 
         enum class JsonFieldError {
             Ok,
@@ -183,137 +202,112 @@ namespace protocol {
         }
 
         cJSON *serialize_peq_band(const device::PeqBand *band) {
-            cJSON *obj = cJSON_CreateObject();
-            if (obj == nullptr) return nullptr;
+            auto obj = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(obj);
 
-            cJSON_AddBoolToObject(obj, "enabled", band->enabled);
-            cJSON_AddNumberToObject(obj, "frequency_hz", band->frequency_hz);
-            cJSON_AddNumberToObject(obj, "gain_db", band->gain_db);
-            cJSON_AddNumberToObject(obj, "q", band->q);
-            cJSON_AddStringToObject(obj, "type", filter_type_to_string(band->type));
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(obj.get(), "enabled", band->enabled));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(obj.get(), "frequency_hz", band->frequency_hz));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(obj.get(), "gain_db", band->gain_db));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(obj.get(), "q", band->q));
+            JSON_CHECK_NULL(cJSON_AddStringToObject(obj.get(), "type", filter_type_to_string(band->type)));
 
-            return obj;
+            return obj.release();
         }
 
         cJSON *serialize_output(const device::OutputState *output) {
-            cJSON *obj = cJSON_CreateObject();
-            if (obj == nullptr) return nullptr;
+            auto obj = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(obj);
 
-            cJSON_AddNumberToObject(obj, "gain_db", output->gain_db);
-            cJSON_AddBoolToObject(obj, "muted", output->muted);
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(obj.get(), "gain_db", output->gain_db));
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(obj.get(), "muted", output->muted));
 
-            cJSON *peq = cJSON_AddObjectToObject(obj, "peq");
-            if (peq == nullptr) {
-                cJSON_Delete(obj);
-                return nullptr;
-            }
+            cJSON *peq = cJSON_AddObjectToObject(obj.get(), "peq");
+            JSON_CHECK_NULL(peq);
 
-            cJSON_AddBoolToObject(peq, "enabled", output->peq.enabled);
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(peq, "enabled", output->peq.enabled));
+
             cJSON *bands = cJSON_AddArrayToObject(peq, "bands");
-            if (bands == nullptr) {
-                cJSON_Delete(obj);
-                return nullptr;
-            }
+            JSON_CHECK_NULL(bands);
+
             for (size_t i = 0; i < output->peq.band_count; ++i) {
-                const auto& band = serialize_peq_band(&output->peq.bands[i]);
+                auto band = make_json(serialize_peq_band(&output->peq.bands[i]));
+                JSON_CHECK_NULL(band);
 
-                if (band == nullptr) {
-                    cJSON_Delete(obj);
-                    return nullptr;
-                }
-
-                cJSON_AddItemToArray(bands, band);
+                JSON_CHECK_NULL(cJSON_AddItemToArray(bands, band.get()));
+                band.release();
             }
 
-            return obj;
+            return obj.release();
         }
 
         cJSON *serialize_input(const device::InputState *input) {
-            cJSON *obj = cJSON_CreateObject();
-            if (obj == nullptr) return nullptr;
+            auto obj = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(obj);
 
-            cJSON_AddNumberToObject(obj, "gain_db", input->gain_db);
-            cJSON_AddBoolToObject(obj, "muted", input->muted);
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(obj.get(), "gain_db", input->gain_db));
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(obj.get(), "muted", input->muted));
 
-            cJSON *peq = cJSON_AddObjectToObject(obj, "peq");
-            if (peq == nullptr) {
-                cJSON_Delete(obj);
-                return nullptr;
-            }
+            cJSON *peq = cJSON_AddObjectToObject(obj.get(), "peq");
+            JSON_CHECK_NULL(peq);
 
-            cJSON_AddBoolToObject(peq, "enabled", input->peq.enabled);
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(peq, "enabled", input->peq.enabled));
+
             cJSON *bands = cJSON_AddArrayToObject(peq, "bands");
-            if (bands == nullptr) {
-                cJSON_Delete(obj);
-                return nullptr;
-            }
+            JSON_CHECK_NULL(bands);
             for (size_t i = 0; i < input->peq.band_count; ++i) {
-                const auto& band = serialize_peq_band(&input->peq.bands[i]);
+                auto band = make_json(serialize_peq_band(&input->peq.bands[i]));
+                JSON_CHECK_NULL(band);
 
-                if (band == nullptr) {
-                    cJSON_Delete(obj);
-                    return nullptr;
-                }
-
-                cJSON_AddItemToArray(bands, band);
+                JSON_CHECK_NULL(cJSON_AddItemToArray(bands, band.get()));
+                band.release();
             }
 
-            return obj;
+            return obj.release();
         }
 
         cJSON *serialize_dsp_config(const device::DspConfig *config) {
-            cJSON *root = cJSON_CreateObject();
-            if (root == nullptr) return nullptr;
+            auto root = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(root);
 
-            cJSON *inputs = cJSON_AddArrayToObject(root, "inputs");
-            if (inputs == nullptr) {
-                cJSON_Delete(root);
-                return nullptr;
-            }
+            cJSON *inputs = cJSON_AddArrayToObject(root.get(), "inputs");
+            JSON_CHECK_NULL(inputs);
+
             for (const auto &i: config->inputs) {
-                cJSON *input = serialize_input(&i);
-                if (input == nullptr) {
-                    cJSON_Delete(root);
-                    return nullptr;
-                }
+                auto input = make_json(serialize_input(&i));
+                JSON_CHECK_NULL(input);
 
-                cJSON_AddItemToArray(inputs, input);
+                JSON_CHECK_NULL(cJSON_AddItemToArray(inputs, input.get()));
+                input.release();
             }
 
-            cJSON *outputs = cJSON_AddArrayToObject(root, "outputs");
-            if (outputs == nullptr) {
-                cJSON_Delete(root);
-                return nullptr;
-            }
+            cJSON *outputs = cJSON_AddArrayToObject(root.get(), "outputs");
+            JSON_CHECK_NULL(outputs);
+
             for (const auto &i: config->outputs) {
-                cJSON *output = serialize_output(&i);
-                if (output == nullptr) {
-                    cJSON_Delete(root);
-                    return nullptr;
-                }
+                auto output = make_json(serialize_output(&i));
+                JSON_CHECK_NULL(output);
 
-                cJSON_AddItemToArray(outputs, output);
+                JSON_CHECK_NULL(cJSON_AddItemToArray(outputs, output.get()));
+                output.release();
             }
 
-            return root;
+            return root.release();
         }
 
         cJSON *serialize_device_state(const device::State &state) {
-            cJSON *root = cJSON_CreateObject();
-            if (root == nullptr) return nullptr;
+            auto root = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(root);
 
-            cJSON_AddNumberToObject(root, "active_preset", state.active_preset);
-            cJSON_AddBoolToObject(root, "preset_modified", state.preset_modified);
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(root.get(), "active_preset", state.active_preset));
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(root.get(), "preset_modified", state.preset_modified));
 
-            cJSON *config = serialize_dsp_config(&state.dsp);
-            if (config == nullptr) {
-                cJSON_Delete(root);
-                return nullptr;
-            }
+            auto config = make_json(serialize_dsp_config(&state.dsp));
+            JSON_CHECK_NULL(config);
 
-            cJSON_AddItemToObject(root, "dsp", config);
+            JSON_CHECK_NULL(cJSON_AddItemToObject(root.get(), "dsp", config.get()));
+            config.release();
 
-            return root;
+            return root.release();
         }
 
         esp_err_t send_json(httpd_req_t *req, const cJSON *json) {
@@ -387,33 +381,27 @@ namespace protocol {
         esp_err_t send_error(httpd_req_t *req, std::optional<uint32_t> request_id, const char *code,
                              const char *field = nullptr,
                              const char *message = nullptr) {
-            cJSON *root = cJSON_CreateObject();
-            if (root == nullptr) {
-                return ESP_ERR_NO_MEM;
-            }
+            auto root = make_json(cJSON_CreateObject());
+            JSON_CHECK_ERR(root);
 
             if (request_id.has_value()) {
-                cJSON_AddNumberToObject(root, "id", request_id.value());
+                JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "id", request_id.value()));
             }
 
-            cJSON_AddStringToObject(root, "type", "error");
+            JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "type", "error"));
 
-            cJSON *error = cJSON_AddObjectToObject(root, "error");
-            if (error == nullptr) {
-                cJSON_Delete(root);
-                return ESP_ERR_NO_MEM;
-            }
+            cJSON *error = cJSON_AddObjectToObject(root.get(), "error");
+            JSON_CHECK_ERR(error);
 
-            cJSON_AddStringToObject(error, "code", code);
+            JSON_CHECK_ERR(cJSON_AddStringToObject(error, "code", code));
 
-            if (field != nullptr) cJSON_AddStringToObject(error, "field", field);
+            if (field != nullptr)
+                JSON_CHECK_ERR(cJSON_AddStringToObject(error, "field", field));
 
-            if (message != nullptr) cJSON_AddStringToObject(error, "message", message);
+            if (message != nullptr)
+                JSON_CHECK_ERR(cJSON_AddStringToObject(error, "message", message));
 
-            const esp_err_t err = send_json(req, root);
-            cJSON_Delete(root);
-
-            return err;
+            return send_json(req, root.get());
         }
 
         esp_err_t send_field_error(httpd_req_t *req, const std::optional<uint32_t> request_id, const char *field,
@@ -444,19 +432,14 @@ namespace protocol {
         }
 
         esp_err_t send_ok(httpd_req_t *req, uint32_t request_id, uint32_t revision) {
-            cJSON *root = cJSON_CreateObject();
-            if (root == nullptr) {
-                return ESP_ERR_NO_MEM;
-            }
+            auto root = make_json(cJSON_CreateObject());
+            JSON_CHECK_ERR(root);
 
-            cJSON_AddNumberToObject(root, "id", request_id);
-            cJSON_AddStringToObject(root, "type", "ok");
-            cJSON_AddNumberToObject(root, "revision", revision);
+            JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "id", request_id));
+            JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "type", "ok"));
+            JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "revision", revision));
 
-            const esp_err_t err = send_json(req, root);
-            cJSON_Delete(root);
-
-            return err;
+            return send_json(req, root.get());
         }
 
         JsonFieldResult json_get_channel_target(const cJSON *root, device::ChannelTarget *out) {
@@ -509,177 +492,153 @@ namespace protocol {
         }
 
         cJSON *create_channel_change(const char *type, device::ChannelTarget target) {
-            cJSON *change = cJSON_CreateObject();
-            if (change == nullptr) return nullptr;
+            auto change = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(change);
 
-            cJSON_AddStringToObject(change, "type", type);
-            cJSON_AddStringToObject(change, "channel_type", channel_kind_to_string(target.kind));
-            cJSON_AddNumberToObject(change, "channel", target.index);
+            JSON_CHECK_NULL(cJSON_AddStringToObject(change.get(), "type", type));
+            JSON_CHECK_NULL(cJSON_AddStringToObject(change.get(), "channel_type", channel_kind_to_string(target.kind)));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(change.get(), "channel", target.index));
 
-            return change;
+            return change.release();
         }
 
         cJSON *create_preset_modified_change() {
-            cJSON *change = cJSON_CreateObject();
-            if (change == nullptr) return nullptr;
+            auto change = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(change);
 
-            cJSON_AddStringToObject(change, "type", "preset_modified");
-            cJSON_AddBoolToObject(change, "value", true);
+            JSON_CHECK_NULL(cJSON_AddStringToObject(change.get(), "type", "preset_modified"));
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(change.get(), "value", true));
 
-            return change;
+            return change.release();
         }
 
-        esp_err_t broadcast_state_update(httpd_handle_t server, uint32_t revision,
-                                         std::initializer_list<cJSON *> changes) {
-            cJSON *root = cJSON_CreateObject();
-            if (root == nullptr) {
-                for (cJSON *change: changes) {
-                    cJSON_Delete(change);
-                }
-                return ESP_ERR_NO_MEM;
-            }
+        template<typename... Changes>
+        esp_err_t broadcast_state_update(httpd_handle_t server, uint32_t revision, Changes... changes) {
+            auto root = make_json(cJSON_CreateObject());
+            JSON_CHECK_ERR(root);
 
-            cJSON_AddStringToObject(root, "type", "state_update");
-            cJSON_AddNumberToObject(root, "revision", revision);
+            JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "type", "state_update"));
+            JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "revision", revision));
 
-            cJSON *changes_json = cJSON_AddArrayToObject(root, "changes");
+            cJSON *changes_json = cJSON_AddArrayToObject(root.get(), "changes");
+            JSON_CHECK_ERR(changes_json);
 
-            if (changes_json == nullptr) {
-                cJSON_Delete(root);
-
-                for (cJSON *change: changes) {
-                    cJSON_Delete(change);
+            auto add_change = [changes_json](JsonPtr &change) {
+                if (!change || !cJSON_AddItemToArray(changes_json, change.get())) {
+                    return false;
                 }
 
-                return ESP_ERR_NO_MEM;
-            }
+                change.release();
+                return true;
+            };
 
-            for (cJSON *change: changes) {
-                if (change == nullptr) {
-                    cJSON_Delete(root);
-                    return ESP_ERR_NO_MEM;
-                }
+            JSON_CHECK_ERR((add_change(changes) && ...));
 
-                cJSON_AddItemToArray(changes_json, change);
-            }
-
-            const esp_err_t err = broadcast_json(server, root);
-            cJSON_Delete(root);
-
-            return err;
+            return broadcast_json(server, root.get());
         }
 
         cJSON *create_channel_gain_change(device::ChannelTarget target, float gain_db) {
-            cJSON *change = create_channel_change("channel_gain", target);
+            auto change = make_json(create_channel_change("channel_gain", target));
+            JSON_CHECK_NULL(change);
 
-            if (change == nullptr) {
-                return nullptr;
-            }
-
-            cJSON_AddNumberToObject(change, "gain_db", gain_db);
-            return change;
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(change.get(), "gain_db", gain_db));
+            return change.release();
         }
 
         esp_err_t broadcast_channel_gain_update(httpd_handle_t server, const uint32_t revision,
                                                 device::ChannelTarget target, const float gain_db) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_gain_change(target, gain_db),
-                                              create_preset_modified_change()
-                                          });
+            return broadcast_state_update(server, revision,
+                                          make_json(create_channel_gain_change(target, gain_db)),
+                                          make_json(create_preset_modified_change())
+            );
         }
 
         cJSON *create_channel_mute_change(device::ChannelTarget target, bool muted) {
-            cJSON *change = create_channel_change("channel_muted", target);
+            auto change = make_json(create_channel_change("channel_muted", target));
+            JSON_CHECK_NULL(change);
 
-            if (change == nullptr) {
-                return nullptr;
-            }
-
-            cJSON_AddBoolToObject(change, "muted", muted);
-            return change;
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(change.get(), "muted", muted));
+            return change.release();
         }
 
         esp_err_t broadcast_channel_mute_update(httpd_handle_t server, const uint32_t revision,
                                                 device::ChannelTarget target, const bool muted) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_mute_change(target, muted),
-                                              create_preset_modified_change()
-                                          });
+            return broadcast_state_update(server, revision,
+                                          make_json(create_channel_mute_change(target, muted)),
+                                          make_json(create_preset_modified_change())
+            );
         }
 
         cJSON *create_channel_peq_enabled_change(device::ChannelTarget target, bool enabled) {
-            cJSON *change = create_channel_change("channel_peq_enabled", target);
+            auto change = make_json(create_channel_change("channel_peq_enabled", target));
+            JSON_CHECK_NULL(change);
 
-            if (change == nullptr) {
-                return nullptr;
-            }
-
-            cJSON_AddBoolToObject(change, "enabled", enabled);
-            return change;
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(change.get(), "enabled", enabled));
+            return change.release();
         }
 
         esp_err_t broadcast_channel_peq_enabled_update(httpd_handle_t server, const uint32_t revision,
                                                        device::ChannelTarget target, const bool enabled) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_peq_enabled_change(target, enabled),
-                                              create_preset_modified_change()
-                                          });
+            return broadcast_state_update(server, revision,
+                                          make_json(create_channel_peq_enabled_change(target, enabled)),
+                                          make_json(create_preset_modified_change())
+            );
         }
 
-        cJSON *create_channel_peq_band_event(const char* event_type, device::ChannelTarget target, uint32_t band_index, device::PeqBand band) {
-            cJSON *change = create_channel_change(event_type, target);
+        cJSON *create_channel_peq_band_event(const char *event_type, device::ChannelTarget target, uint32_t band_index,
+                                             device::PeqBand band) {
+            auto change = make_json(create_channel_change(event_type, target));
+            JSON_CHECK_NULL(change);
 
-            if (change == nullptr) {
-                return nullptr;
-            }
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(change.get(), "band", band_index));
 
-            cJSON_AddNumberToObject(change, "band", band_index);
+            cJSON *value = cJSON_AddObjectToObject(change.get(), "value");
+            JSON_CHECK_NULL(value);
 
-            cJSON *value = cJSON_AddObjectToObject(change, "value");
-            cJSON_AddBoolToObject(value, "enabled", band.enabled);
-            cJSON_AddNumberToObject(value, "frequency_hz", band.frequency_hz);
-            cJSON_AddNumberToObject(value, "q", band.q);
-            cJSON_AddNumberToObject(value, "gain_db", band.gain_db);
-            cJSON_AddStringToObject(value, "type", filter_type_to_string(band.type));
+            JSON_CHECK_NULL(cJSON_AddBoolToObject(value, "enabled", band.enabled));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(value, "frequency_hz", band.frequency_hz));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(value, "q", band.q));
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(value, "gain_db", band.gain_db));
+            JSON_CHECK_NULL(cJSON_AddStringToObject(value, "type", filter_type_to_string(band.type)));
 
-            return change;
+            return change.release();
         }
 
         esp_err_t broadcast_channel_peq_band_change_update(httpd_handle_t server, const uint32_t revision,
-                                                    device::ChannelTarget target, uint32_t band_index,
-                                                    const device::PeqBand &band) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_peq_band_event("channel_peq_band_changed", target, band_index, band),
-                                              create_preset_modified_change()
-                                          });
+                                                           device::ChannelTarget target, uint32_t band_index,
+                                                           const device::PeqBand &band) {
+            return broadcast_state_update(server, revision,
+                                          make_json(create_channel_peq_band_event(
+                                              "channel_peq_band_changed", target, band_index, band)),
+                                          make_json(create_preset_modified_change())
+            );
         }
 
         esp_err_t broadcast_channel_peq_band_add_update(httpd_handle_t server, const uint32_t revision,
-                                                    device::ChannelTarget target, uint32_t band_index,
-                                                    const device::PeqBand &band) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_peq_band_event("channel_peq_band_added", target, band_index, band),
-                                              create_preset_modified_change()
-                                          });
+                                                        device::ChannelTarget target, uint32_t band_index,
+                                                        const device::PeqBand &band) {
+            return broadcast_state_update(server, revision,
+                                          make_json(create_channel_peq_band_event(
+                                              "channel_peq_band_added", target, band_index, band)),
+                                          make_json(create_preset_modified_change())
+            );
         }
 
         cJSON *create_channel_peq_band_deletion(device::ChannelTarget target, uint32_t band_index) {
-            cJSON *change = create_channel_change("channel_peq_band_deleted", target);
-            if (change == nullptr) {
-                return nullptr;
-            }
+            auto change = make_json(create_channel_change("channel_peq_band_deleted", target));
+            JSON_CHECK_NULL(change);
 
-            cJSON_AddNumberToObject(change, "band", band_index);
+            JSON_CHECK_NULL(cJSON_AddNumberToObject(change.get(), "band", band_index));
 
-            return change;
+            return change.release();
         }
 
         esp_err_t broadcast_channel_peq_band_delete_update(httpd_handle_t server, const uint32_t revision,
-                                                    device::ChannelTarget target, uint32_t band_index) {
-            return broadcast_state_update(server, revision, {
-                                              create_channel_peq_band_deletion(target, band_index),
-                                              create_preset_modified_change()
-                                          });
+                                                           device::ChannelTarget target, uint32_t band_index) {
+            return broadcast_state_update(server, revision,
+                                          make_json(create_channel_peq_band_deletion(target, band_index)),
+                                          make_json(create_preset_modified_change())
+            );
         }
 
         void log_broadcast_error(esp_err_t err) {
@@ -996,28 +955,21 @@ namespace protocol {
     }
 
     esp_err_t send_hello(httpd_req_t *req) {
-        cJSON *root = cJSON_CreateObject();
-        if (root == nullptr) {
-            return ESP_ERR_NO_MEM;
-        }
+        auto root = make_json(cJSON_CreateObject());
+        JSON_CHECK_ERR(root);
 
-        cJSON_AddStringToObject(root, "type", "hello");
-        cJSON_AddNumberToObject(root, "protocol_version", 1);
-        cJSON_AddStringToObject(root, "firmware_version", "0.1.0");
+        JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "type", "hello"));
+        JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "protocol_version", 1));
+        JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "firmware_version", "0.1.0"));
+        JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "revision", device::get_revision()));
 
-        cJSON_AddNumberToObject(root, "revision", device::get_revision());
-        cJSON *state_json = serialize_device_state(device::get_state());
-        if (state_json == nullptr) {
-            cJSON_Delete(root);
-            return ESP_ERR_NO_MEM;
-        }
-        cJSON_AddItemToObject(root, "state", state_json);
+        auto state_json = make_json(serialize_device_state(device::get_state()));
+        JSON_CHECK_ERR(state_json);
 
-        const esp_err_t err = send_json(req, root);
+        JSON_CHECK_ERR(cJSON_AddItemToObject(root.get(), "state", state_json.get()));
+        state_json.release();
 
-        cJSON_Delete(root);
-
-        return err;
+        return send_json(req, root.get());
     }
 
     esp_err_t handle_message(httpd_req_t *req, const char *data, size_t len) {
