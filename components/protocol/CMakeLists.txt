@@ -5,4 +5,5 @@ idf_component_register(
             cjson
             esp_http_server
             device_state
+            esp_timer
 )

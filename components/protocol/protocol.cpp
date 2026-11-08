@@ -1008,4 +1008,13 @@ namespace protocol {
 
         return err;
     }
+
+    esp_err_t broadcast_heartbeat(httpd_handle_t server) {
+        auto root = make_json(cJSON_CreateObject());
+        JSON_CHECK_ERR(root);
+
+        JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "type", "heartbeat"));
+
+        return broadcast_json(server, root.get());
+    }
 }

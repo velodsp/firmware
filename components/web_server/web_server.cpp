@@ -6,6 +6,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "protocol.hpp"
+#include "esp_timer.h"
 
 static auto TAG = "web_server";
 
@@ -52,6 +53,28 @@ static esp_err_t websocket_handler(httpd_req_t *req) {
     return err;
 }
 
+static esp_timer_handle_t s_heartbeat_timer = nullptr;
+
+static void heartbeat_work(void *arg) {
+    const auto server = arg;
+
+    const esp_err_t err = protocol::broadcast_heartbeat(server);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Heartbeat failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void heartbeat_timer_callback(void *arg) {
+    const auto server = arg;
+
+    const esp_err_t err = httpd_queue_work(server, heartbeat_work, arg);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to queue heartbeat: %s", esp_err_to_name(err));
+    }
+}
+
 esp_err_t web_server_start() {
     if (s_server != nullptr) {
         return ESP_OK;
@@ -84,12 +107,29 @@ esp_err_t web_server_start() {
         return err;
     }
 
+    const esp_timer_create_args_t timer_args = {
+        .callback = heartbeat_timer_callback,
+        .arg = s_server,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ws_heartbeat",
+        .skip_unhandled_events = true
+    };
+
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_heartbeat_timer), TAG, "Failed to create heartbeat timer");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_heartbeat_timer, 5'000'000), TAG, "Failed to start heartbeat timer");
+
     ESP_LOGI(TAG, "WebSocket server started");
 
     return ESP_OK;
 }
 
 void web_server_stop() {
+    if (s_heartbeat_timer != nullptr) {
+        esp_timer_stop(s_heartbeat_timer);
+        esp_timer_delete(s_heartbeat_timer);
+        s_heartbeat_timer = nullptr;
+    }
+
     if (s_server != nullptr) {
         httpd_stop(s_server);
         s_server = nullptr;

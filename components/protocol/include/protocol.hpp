@@ -7,5 +7,6 @@ namespace protocol {
 
     esp_err_t handle_message(httpd_req_t *req, const char *data, size_t len);
     esp_err_t send_hello(httpd_req_t *req);
+    esp_err_t broadcast_heartbeat(httpd_handle_t server);
 
 }
