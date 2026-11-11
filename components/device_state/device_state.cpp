@@ -49,14 +49,44 @@ namespace device {
             return std::forward<Fn>(fn)(channels[index]);
         }
 
+        class StateLock {
+        public:
+            StateLock() {
+                locked_ = s_mutex != nullptr && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE;
+            }
+
+            ~StateLock() {
+                if (locked_) {
+                    xSemaphoreGive(s_mutex);
+                }
+            }
+
+            [[nodiscard]] bool locked() const {
+                return locked_;
+            }
+
+            StateLock(const StateLock &) = delete;
+
+            StateLock &operator=(const StateLock &) = delete;
+
+        private:
+            bool locked_ = false;
+        };
+
         template<typename Fn>
         MutationResult with_channel(ChannelTarget target, Fn &&fn) {
+            StateLock lock;
+
+            if (!lock.locked()) {
+                return {.error = DeviceError::InternalError, .changed = false, .revision = 0};
+            }
+
             switch (target.kind) {
                 case ChannelKind::Input:
-                    return with_channel(s_state.dsp.inputs,target.index,std::forward<Fn>(fn));
+                    return with_channel(s_state.dsp.inputs, target.index, std::forward<Fn>(fn));
 
                 case ChannelKind::Output:
-                    return with_channel(s_state.dsp.outputs,target.index,std::forward<Fn>(fn));
+                    return with_channel(s_state.dsp.outputs, target.index, std::forward<Fn>(fn));
             }
 
             return error_result(DeviceError::InvalidChannel);
@@ -64,37 +94,38 @@ namespace device {
     }
 
     esp_err_t init() {
+        if (s_mutex != nullptr) {
+            return ESP_OK;
+        }
+
         s_mutex = xSemaphoreCreateMutex();
 
         return s_mutex ? ESP_OK : ESP_ERR_NO_MEM;
     }
 
     esp_err_t get_snapshot(State &out, uint32_t &revision) {
-        if (s_mutex == nullptr) {
-            return ESP_ERR_INVALID_STATE;
-        }
+        StateLock lock;
 
-        if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
-            return ESP_FAIL;
+        if (!lock.locked()) {
+            return ESP_ERR_INVALID_STATE;
         }
 
         out = s_state;
         revision = s_revision;
 
-        xSemaphoreGive(s_mutex);
         return ESP_OK;
     }
 
     MutationResult set_channel_gain(const ChannelTarget target, const float gain_db) {
-        if (!std::isfinite(gain_db)) {
-            return error_result(DeviceError::InvalidGain);
-        }
-
-        if (gain_db < ChannelGainMinDb || gain_db > ChannelGainMaxDb) {
-            return error_result(DeviceError::GainOutOfRange);
-        }
-
         return with_channel(target, [gain_db](auto &channel) {
+            if (!std::isfinite(gain_db)) {
+                return error_result(DeviceError::InvalidGain);
+            }
+
+            if (gain_db < ChannelGainMinDb || gain_db > ChannelGainMaxDb) {
+                return error_result(DeviceError::GainOutOfRange);
+            }
+
             if (channel.gain_db == gain_db) {
                 return unchanged_result();
             }
@@ -129,7 +160,8 @@ namespace device {
         });
     }
 
-    MutationResult set_channel_peq_band(const ChannelTarget target, size_t band_index, const PeqBandPatch &patch, PeqBand &band_result) {
+    MutationResult set_channel_peq_band(const ChannelTarget target, size_t band_index, const PeqBandPatch &patch,
+                                        PeqBand &band_result) {
         return with_channel(target, [&](auto &channel) {
             if (band_index >= channel.peq.bands.size()) {
                 return error_result(DeviceError::InvalidPeqBand);

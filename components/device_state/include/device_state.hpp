@@ -38,7 +38,8 @@ namespace device {
         InvalidPeqGain,
         PeqGainOutOfRange,
         InvalidPeqFilter,
-        MaxPeqBandsReached
+        MaxPeqBandsReached,
+        InternalError
     };
 
     enum class FilterType {
