@@ -4,11 +4,14 @@
 #include <vector>
 
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 namespace device {
     namespace {
         State s_state{};
         uint32_t s_revision = 0;
+        SemaphoreHandle_t s_mutex = nullptr;
 
         MutationResult error_result(const DeviceError error) {
             return {
@@ -60,12 +63,26 @@ namespace device {
         }
     }
 
-    const State &get_state() {
-        return s_state;
+    esp_err_t init() {
+        s_mutex = xSemaphoreCreateMutex();
+
+        return s_mutex ? ESP_OK : ESP_ERR_NO_MEM;
     }
 
-    uint32_t get_revision() {
-        return s_revision;
+    esp_err_t get_snapshot(State &out, uint32_t &revision) {
+        if (s_mutex == nullptr) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+            return ESP_FAIL;
+        }
+
+        out = s_state;
+        revision = s_revision;
+
+        xSemaphoreGive(s_mutex);
+        return ESP_OK;
     }
 
     MutationResult set_channel_gain(const ChannelTarget target, const float gain_db) {

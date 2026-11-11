@@ -955,15 +955,30 @@ namespace protocol {
     }
 
     esp_err_t send_hello(httpd_req_t *req) {
+        auto state = std::unique_ptr<device::State>(new (std::nothrow) device::State{});
+
+        if (!state) {
+            ESP_LOGE(TAG, "Failed to allocate device state snapshot");
+            return ESP_ERR_NO_MEM;
+        }
+
+        uint32_t revision = 0;
+
+        const auto snapshot = device::get_snapshot(*state, revision);
+        if (snapshot != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get device state snapshot: %s", esp_err_to_name(snapshot));
+            return ESP_FAIL;
+        }
+
         auto root = make_json(cJSON_CreateObject());
         JSON_CHECK_ERR(root);
 
         JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "type", "hello"));
         JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "protocol_version", 1));
         JSON_CHECK_ERR(cJSON_AddStringToObject(root.get(), "firmware_version", "0.1.0"));
-        JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "revision", device::get_revision()));
+        JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "revision", revision));
 
-        auto state_json = make_json(serialize_device_state(device::get_state()));
+        auto state_json = make_json(serialize_device_state(*state));
         JSON_CHECK_ERR(state_json);
 
         JSON_CHECK_ERR(cJSON_AddItemToObject(root.get(), "state", state_json.get()));

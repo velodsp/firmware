@@ -33,6 +33,8 @@ static void wifi_status_changed(wifi_status_t status) {
 extern "C" void app_main(void) {
     esp_err_t err;
 
+    ESP_ERROR_CHECK(device::init());
+
     err = status_led_init(RGB_LED_GPIO);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize status LED: %s", esp_err_to_name(err));

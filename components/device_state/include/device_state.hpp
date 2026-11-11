@@ -122,9 +122,8 @@ namespace device {
         std::optional<FilterType> type;
     };
 
-    const State &get_state();
-
-    uint32_t get_revision();
+    esp_err_t init();
+    esp_err_t get_snapshot(State &out, uint32_t &revision);
 
     MutationResult set_channel_gain(ChannelTarget target, float gain_db);
     MutationResult set_channel_muted(ChannelTarget target, bool muted);
