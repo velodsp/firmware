@@ -8,6 +8,9 @@
 #include "wifi.h"
 #include "discovery.h"
 #include "device_state.hpp"
+#include "adau1452.hpp"
+
+#include "freertos/FreeRTOS.h"
 
 #define RGB_LED_GPIO 38
 
@@ -33,6 +36,18 @@ static void wifi_status_changed(wifi_status_t status) {
 extern "C" void app_main(void) {
     esp_err_t err;
 
+    adau1452::Config dsp_config{};
+
+    dsp_config.host = SPI2_HOST;
+
+    dsp_config.mosi_gpio = GPIO_NUM_11;
+    dsp_config.miso_gpio = GPIO_NUM_13;
+    dsp_config.sclk_gpio = GPIO_NUM_12;
+    dsp_config.cs_gpio = GPIO_NUM_10;
+
+    dsp_config.selfboot_wait_ms = 100;
+
+    ESP_ERROR_CHECK(adau1452::init(dsp_config));
     ESP_ERROR_CHECK(device::init());
 
     err = status_led_init(RGB_LED_GPIO);

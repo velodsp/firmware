@@ -7,4 +7,5 @@ idf_component_register(
             web_server
             discovery
             device_state
+            adau1452
 )
