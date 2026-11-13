@@ -289,4 +289,29 @@ namespace adau1452 {
 
         return ESP_OK;
     }
+
+    esp_err_t write_safeload(uint16_t target_address, const uint32_t *words, size_t word_count,
+                             uint32_t sample_rate_hz) {
+        if (words == nullptr || word_count == 0 || word_count > MaxSafeloadWords || sample_rate_hz == 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        // write data words into safeload slots
+        esp_err_t err = write_parameters(DataSafeload0Address, words, word_count);
+        if (err != ESP_OK) return err;
+
+        // write the destination parameter address
+        err = write_parameter(AddressSafeloadAddress, target_address);
+        if (err != ESP_OK) return err;
+
+        // write NUM_SAFELOAD last (triggers the safeload operation)
+        err = write_parameter(NumSafeloadAddress, word_count);
+        if (err != ESP_OK) return err;
+
+        // allow at least one audio frame for the safeload to execute
+        const auto frame_time_us = static_cast<uint32_t>((1000000ULL + sample_rate_hz - 1) / sample_rate_hz);
+        esp_rom_delay_us(frame_time_us);
+
+        return ESP_OK;
+    }
 }
