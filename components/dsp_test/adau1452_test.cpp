@@ -20,17 +20,14 @@ namespace adau1452_test {
         }
     }
 
-    esp_err_t test_unmute_outputs() {
-        ESP_LOGI(TAG, "Unmuting outputs");
+    esp_err_t test_set_outputs_muted(bool muted) {
+        ESP_LOGI(TAG, "Unmuting outputs...");
 
-
-        for (const auto out: adau1452::output_processing) {
-            ESP_RETURN_ON_ERROR(
-                adau1452::write_parameter(out.init_mute.address, 0x01000000),
-                TAG,
-                "Failed to unmute output %s", out.init_mute.address
-            );
-        }
+        ESP_RETURN_ON_ERROR(
+            adau1452::write_parameter(adau1452::init_mute.address, muted ? 0x00000000 : 0x01000000),
+            TAG,
+            "Failed to unmute output %s", adau1452::init_mute.address
+        );
 
         return ESP_OK;
     }
