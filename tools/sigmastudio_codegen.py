@@ -37,20 +37,48 @@ def parse_param_header(path):
             continue
 
         child = normalize(comment.group(1))
+        module = count.group(1)
 
+        # handle the global INIT_MUTE parameter separately
+        if module == "INIT_MUTE":
+            prefix = f"MOD_{module}_"
+            addresses = []
+
+            for line in block.splitlines():
+                match = re.match(
+                    r"\s*#define\s+(\w+)\s+(.+?)\s*$",
+                    line,
+                )
+                if not match:
+                    continue
+
+                macro, rhs = match.groups()
+
+                if (
+                        macro.startswith(prefix)
+                        and macro.endswith("_ADDR")
+                        and macro.endswith("_MUTE_ADDR")
+                ):
+                    addresses.append(int(rhs, 0))
+
+            if len(addresses) != 1:
+                raise ValueError(
+                    f"Expected one init mute address, found {len(addresses)}"
+                )
+
+            init_mute = addresses[0]
+            continue
+
+        # Identify output processing child modules.
         if child.startswith("VOLUME"):
             role = "volume"
             parameter = "TARGET"
         elif child.startswith("USER_MUTE"):
-            role = "user_mute"
-            parameter = "MUTE"
-        elif child.startswith("INIT_MUTE"):
-            role = "init_mute"
+            role = "mute"
             parameter = "MUTE"
         else:
             continue
 
-        module = count.group(1)
         suffix = "_" + child
 
         # remove the child module name to get its parent name
@@ -86,7 +114,10 @@ def parse_param_header(path):
 
         group[role] = addresses[0]
 
-    return groups
+    if init_mute is None:
+        raise ValueError("INIT_MUTE address not found.")
+
+    return groups, init_mute
 
 
 def sort_key(name):
@@ -95,13 +126,13 @@ def sort_key(name):
 
 
 def generate(param_header):
-    groups = parse_param_header(param_header)
+    groups, init_mute = parse_param_header(param_header)
 
     # keep only parent modules for which both addresses were found
     complete = [
         (name, values)
         for name, values in groups.items()
-        if "volume" in values and "user_mute" in values and "init_mute" in values
+        if "volume" in values and "mute" in values
     ]
     complete.sort(key=lambda item: sort_key(item[0]))
 
@@ -125,22 +156,23 @@ def generate(param_header):
         "struct OutputProcessing {",
         "    const char* name;",
         "    ParameterRef volume;",
-        "    ParameterRef user_mute;",
-        "    ParameterRef init_mute;",
+        "    ParameterRef mute;",
         "};",
+        "",
+        "inline constexpr ParameterRef init_mute =",
+        f"    {{0x{init_mute:04X}}};",
         "",
         "inline constexpr OutputProcessing output_processing[] = {",
     ]
 
     for name, values in complete:
         volume_address = values["volume"]
-        user_mute_address = values["user_mute"]
-        init_mute_address = values["init_mute"]
+        mute_address = values["mute"]
+
         output.append(
             f"    {{{json.dumps(name)}, "
             f"{{0x{volume_address:04X}}}, "
-            f"{{0x{user_mute_address:04X}}},"
-            f"{{0x{init_mute_address:04X}}}}},"
+            f"{{0x{mute_address:04X}}}}},"
         )
 
     output.extend([
@@ -160,11 +192,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Convert SigmaStudio parameter addresses to a C++ header."
     )
+
     parser.add_argument(
         "param_header",
         type=Path,
         help="SigmaStudio *_PARAM.h file",
     )
+
     parser.add_argument(
         "-o",
         "--output",
@@ -172,11 +206,14 @@ def main():
         default=Path("./components/adau1452/include/dsp_mapping.hpp"),
         help="Output C++ header path",
     )
+
     args = parser.parse_args()
 
     try:
         result = generate(args.param_header)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(result, encoding="utf-8", newline="\n")
+
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
