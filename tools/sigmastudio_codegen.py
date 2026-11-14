@@ -38,11 +38,14 @@ def parse_param_header(path):
 
         child = normalize(comment.group(1))
 
-        if child.startswith("SWVOL"):
+        if child.startswith("VOLUME"):
             role = "volume"
             parameter = "TARGET"
-        elif child.startswith("MUTE"):
-            role = "mute"
+        elif child.startswith("USER_MUTE"):
+            role = "user_mute"
+            parameter = "MUTE"
+        elif child.startswith("INIT_MUTE"):
+            role = "init_mute"
             parameter = "MUTE"
         else:
             continue
@@ -98,7 +101,7 @@ def generate(param_header):
     complete = [
         (name, values)
         for name, values in groups.items()
-        if "volume" in values and "mute" in values
+        if "volume" in values and "user_mute" in values and "init_mute" in values
     ]
     complete.sort(key=lambda item: sort_key(item[0]))
 
@@ -122,7 +125,8 @@ def generate(param_header):
         "struct OutputProcessing {",
         "    const char* name;",
         "    ParameterRef volume;",
-        "    ParameterRef mute;",
+        "    ParameterRef user_mute;",
+        "    ParameterRef init_mute;",
         "};",
         "",
         "inline constexpr OutputProcessing output_processing[] = {",
@@ -130,11 +134,13 @@ def generate(param_header):
 
     for name, values in complete:
         volume_address = values["volume"]
-        mute_address = values["mute"]
+        user_mute_address = values["user_mute"]
+        init_mute_address = values["init_mute"]
         output.append(
             f"    {{{json.dumps(name)}, "
             f"{{0x{volume_address:04X}}}, "
-            f"{{0x{mute_address:04X}}}}},"
+            f"{{0x{user_mute_address:04X}}},"
+            f"{{0x{init_mute_address:04X}}}}},"
         )
 
     output.extend([

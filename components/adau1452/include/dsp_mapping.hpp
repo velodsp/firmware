@@ -14,18 +14,19 @@ struct ParameterRef {
 struct OutputProcessing {
     const char* name;
     ParameterRef volume;
-    ParameterRef mute;
+    ParameterRef user_mute;
+    ParameterRef init_mute;
 };
 
 inline constexpr OutputProcessing output_processing[] = {
-    {"OUTPUT_PROCESSING", {0x00C3}, {0x00CB}},
-    {"OUTPUT_PROCESSING_2", {0x00C2}, {0x00CA}},
-    {"OUTPUT_PROCESSING_3", {0x00C1}, {0x00C9}},
-    {"OUTPUT_PROCESSING_4", {0x00C0}, {0x00C8}},
-    {"OUTPUT_PROCESSING_5", {0x00BF}, {0x00C7}},
-    {"OUTPUT_PROCESSING_6", {0x00BE}, {0x00C6}},
-    {"OUTPUT_PROCESSING_7", {0x00BD}, {0x00C5}},
-    {"OUTPUT_PROCESSING_8", {0x00BC}, {0x00C4}},
+    {"OUTPUT_PROCESSING", {0x00D3}, {0x0093},{0x00AB}},
+    {"OUTPUT_PROCESSING_2", {0x00D2}, {0x0090},{0x00A8}},
+    {"OUTPUT_PROCESSING_3", {0x00D1}, {0x008D},{0x00A5}},
+    {"OUTPUT_PROCESSING_4", {0x00D0}, {0x008A},{0x00A2}},
+    {"OUTPUT_PROCESSING_5", {0x00CF}, {0x0087},{0x009F}},
+    {"OUTPUT_PROCESSING_6", {0x00CE}, {0x0084},{0x009C}},
+    {"OUTPUT_PROCESSING_7", {0x00CD}, {0x0081},{0x0099}},
+    {"OUTPUT_PROCESSING_8", {0x00CC}, {0x007E},{0x0096}},
 };
 
 inline constexpr std::size_t output_processing_count =

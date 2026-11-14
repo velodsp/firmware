@@ -8,4 +8,5 @@ idf_component_register(
             discovery
             device_state
             adau1452
+            dsp_test
 )
