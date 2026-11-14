@@ -9,6 +9,7 @@
 #include "discovery.h"
 #include "device_state.hpp"
 #include "adau1452.hpp"
+#include "dsp_controller.hpp"
 
 #include "freertos/FreeRTOS.h"
 
@@ -48,7 +49,10 @@ extern "C" void app_main(void) {
     dsp_config.selfboot_wait_ms = 500;
 
     ESP_ERROR_CHECK(adau1452::init(dsp_config));
+
     ESP_ERROR_CHECK(device::init());
+
+    ESP_ERROR_CHECK(dsp_controller::start());
 
     err = status_led_init(RGB_LED_GPIO);
     if (err != ESP_OK) {

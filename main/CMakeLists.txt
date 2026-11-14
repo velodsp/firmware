@@ -9,4 +9,5 @@ idf_component_register(
             device_state
             adau1452
             dsp_test
+            dsp_controller
 )
