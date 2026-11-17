@@ -13,6 +13,7 @@
 #include "esp_log.h"
 
 #include "device_state.hpp"
+#include "dsp_controller.hpp"
 
 namespace protocol {
     namespace {
@@ -689,6 +690,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
+                dsp_controller::notify_state_changed();
+
                 log_broadcast_error(
                     broadcast_channel_gain_update(
                         req->handle, result.revision, target, gain_db
@@ -720,6 +723,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
+                dsp_controller::notify_state_changed();
+
                 log_broadcast_error(
                     broadcast_channel_mute_update(
                         req->handle, result.revision, target, muted
@@ -750,6 +755,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
+                dsp_controller::notify_state_changed();
+
                 log_broadcast_error(
                     broadcast_channel_peq_enabled_update(
                         req->handle, result.revision, target, enabled
@@ -833,6 +840,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
+                dsp_controller::notify_state_changed();
+
                 log_broadcast_error(
                     broadcast_channel_peq_band_change_update(
                         req->handle, result.revision, target, band_index, band_result
@@ -869,6 +878,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
+                dsp_controller::notify_state_changed();
+
                 log_broadcast_error(
                     broadcast_channel_peq_band_add_update(
                         req->handle, result.revision, target, band_index, band_result
@@ -910,6 +921,8 @@ namespace protocol {
             const esp_err_t response_err = send_ok(req, request_id, result.revision);
 
             if (result.changed) {
+                dsp_controller::notify_state_changed();
+
                 log_broadcast_error(
                     broadcast_channel_peq_band_delete_update(
                         req->handle, result.revision, target, band_index

@@ -6,4 +6,5 @@ idf_component_register(
             esp_http_server
             device_state
             esp_timer
+            dsp_controller
 )
