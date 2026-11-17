@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 
 namespace adau1452 {
@@ -14,7 +15,8 @@ namespace adau1452 {
         // Datasheet page 61 table: CORE_STATUS
         constexpr uint16_t CoreStatusAddress = 0xF405;
 
-        constexpr int InitialSpiClockHz = 300000;
+        constexpr int InitialSpiClockHz = 300'000;
+        constexpr int NormalSpiClockHz = 20'000'000;
 
         // SPI frame:
         //   1 byte command
@@ -124,7 +126,7 @@ namespace adau1452 {
 
                 if (err != ESP_OK) return err;
 
-                if ((status & 0x0001U) != 0) return ESP_OK;
+                if ((status & 0x0007U) == 0x0001U) return ESP_OK;
 
                 if (elapsed_ms == timeout_ms) break;
 
@@ -136,6 +138,29 @@ namespace adau1452 {
             }
 
             return ESP_ERR_TIMEOUT;
+        }
+
+        esp_err_t add_spi_device(int cs_gpio, int clock_hz) {
+            spi_device_interface_config_t device_config{};
+
+            device_config.clock_speed_hz = clock_hz;
+            device_config.mode = 3;
+            device_config.spics_io_num = cs_gpio;
+            device_config.queue_size = 1;
+
+            return spi_bus_add_device(s_host, &device_config, &s_device);
+        }
+
+        esp_err_t set_spi_clock(int cs_gpio, int clock_hz) {
+            if (s_device == nullptr) return ESP_ERR_INVALID_STATE;
+            if (clock_hz <= 0) return ESP_ERR_INVALID_ARG;
+
+            esp_err_t err = spi_bus_remove_device(s_device);
+            if (err != ESP_OK) return err;
+
+            s_device = nullptr;
+
+            return add_spi_device(cs_gpio, clock_hz);
         }
     }
 
@@ -174,14 +199,7 @@ namespace adau1452 {
 
         s_bus_initialized = true;
 
-        spi_device_interface_config_t device_config{};
-
-        device_config.clock_speed_hz = InitialSpiClockHz;
-        device_config.mode = 3;
-        device_config.spics_io_num = config.cs_gpio;
-        device_config.queue_size = 1;
-
-        err = spi_bus_add_device(config.host, &device_config, &s_device);
+        err = add_spi_device(config.cs_gpio, InitialSpiClockHz);
 
         if (err != ESP_OK) {
             cleanup();
@@ -204,11 +222,27 @@ namespace adau1452 {
 
         // reference: adau1452_initialize(), CORE_STATUS check
         err = wait_for_core();
+        if (err != ESP_OK) {
+            cleanup();
+            return err;
+        }
+
+        err = set_spi_clock(config.cs_gpio, NormalSpiClockHz);
+        if (err != ESP_OK) {
+            cleanup();
+            return err;
+        }
+
+        int actual_freq_khz = 0;
+
+        err = spi_device_get_actual_freq(s_device, &actual_freq_khz);
 
         if (err != ESP_OK) {
             cleanup();
             return err;
         }
+
+        ESP_LOGI(TAG, "SPI operating frequency: %d kHz", actual_freq_khz);
 
         return ESP_OK;
     }
