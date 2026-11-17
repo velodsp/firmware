@@ -34,6 +34,9 @@ namespace dsp_controller {
 
             std::array<uint32_t, adau1452::output_processing_count> output_volume{};
             std::array<uint32_t, adau1452::output_processing_count> output_mute{};
+
+            std::array<uint32_t, adau1452::input_processing_count> input_volume{};
+            std::array<uint32_t, adau1452::input_processing_count> input_mute{};
         };
 
         uint32_t encode_volume(const float gain_db) {
@@ -88,6 +91,32 @@ namespace dsp_controller {
                         return err;
                     }
                     applied.output_mute[i] = mute;
+                }
+            }
+
+            for (size_t i = 0; i < adau1452::input_processing_count; ++i) {
+                const auto &mapping = adau1452::input_processing[i];
+                const auto &input = state.dsp.inputs[i];
+
+                const uint32_t volume = encode_volume(input.gain_db);
+                const uint32_t mute = encode_mute(input.muted);
+
+                if (write_all || volume != applied.input_volume[i]) {
+                    esp_err_t err = adau1452::write_parameter(mapping.volume.address, volume);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to write input %u volume", static_cast<unsigned>(i));
+                        return err;
+                    }
+                    applied.input_volume[i] = volume;
+                }
+
+                if (write_all || mute != applied.input_mute[i]) {
+                    esp_err_t err = adau1452::write_parameter(mapping.mute.address, mute);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to write input %u mute", static_cast<unsigned>(i));
+                        return err;
+                    }
+                    applied.input_mute[i] = mute;
                 }
             }
 
