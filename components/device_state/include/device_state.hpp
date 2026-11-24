@@ -9,7 +9,7 @@
 #include "esp_err.h"
 
 namespace device {
-    constexpr size_t InputCount = 4;
+    constexpr size_t InputCount = 6;
     constexpr size_t OutputCount = 8;
     constexpr size_t InputPeqBands = 16;
     constexpr size_t OutputPeqBands = 24;
