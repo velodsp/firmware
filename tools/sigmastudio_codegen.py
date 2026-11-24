@@ -7,10 +7,126 @@ import re
 import sys
 from pathlib import Path
 
+COEFFICIENTS_PER_BAND = 5
+INPUT_BANDS_PER_EQ = 8
+OUTPUT_BANDS_PER_EQ = 12
+
 
 def normalize(text):
     """normalize SigmaStudio module names"""
     return re.sub(r"\s+", "", text.strip().upper())
+
+
+def _macro_definitions(block, prefix):
+    """yield (macro name, value) definitions belonging to one module"""
+    for line in block.splitlines():
+        match = re.match(r"\s*#define\s+(\w+)\s+(.+?)\s*$", line)
+        if not match:
+            continue
+
+        macro, rhs = match.groups()
+        if macro.startswith(prefix):
+            yield macro, rhs
+
+
+def _parse_eq_bands(block, module, band_count):
+    """read the exported coefficient addresses (5) for each band
+
+    format: TARGB2{band}{coefficient}, e.g. band 10 coefficient 2 = TARGB2101 (2 - 1 = 1, 0-indexed)"""
+
+    prefix = f"MOD_{module}_"
+    bands = {}
+
+    for macro, rhs in _macro_definitions(block, prefix):
+        if not macro.endswith("_ADDR"):
+            continue
+
+        parameter_name = macro[len(prefix):-len("_ADDR")]
+        match = re.search(r"TARGB2(\d+)([0-4])$", parameter_name)
+
+        if not match:
+            continue
+
+        band_number = int(match.group(1))
+        coefficient_index = int(match.group(2))
+
+        if not 1 <= band_number <= band_count:
+            raise ValueError(
+                f"Band {band_number} outside 1..{band_count} in {module}: {macro}"
+            )
+
+        key = (band_number - 1, coefficient_index)
+
+        if key in bands:
+            raise ValueError(f"Duplicate EQ coefficient address: {macro}")
+
+        bands[key] = int(rhs, 0)
+
+    expected = {
+        (band, coefficient)
+        for band in range(band_count)
+        for coefficient in range(COEFFICIENTS_PER_BAND)
+    }
+
+    missing = sorted(expected - bands.keys())
+    extra = sorted(bands.keys() - expected)
+
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing slots {missing[:8]}")
+        if extra:
+            details.append(f"unexpected slots {extra[:8]}")
+        if not bands:
+            details.append("no coefficient addresses were recognized")
+        raise ValueError(f"Invalid EQ coefficient layout in {module}: {'; '.join(details)}")
+
+    return [
+        [
+            bands[(band, coefficient)]
+            for coefficient in range(COEFFICIENTS_PER_BAND)
+        ]
+        for band in range(band_count)
+    ]
+
+
+def _find_single_address(block, module, suffix, role):
+    """find the address macro whose parameter name has the given suffix"""
+    prefix = f"MOD_{module}_"
+    addresses = []
+
+    for macro, rhs in _macro_definitions(block, prefix):
+        if not macro.endswith("_ADDR"):
+            continue
+        parameter_name = macro[len(prefix):-len("_ADDR")]
+        if parameter_name.endswith(suffix):
+            addresses.append(int(rhs, 0))
+
+    if len(addresses) != 1:
+        raise ValueError(f"Expected one {role} addresses in {module}, found {len(addresses)}")
+    return addresses[0]
+
+
+def _module_role(child, direction):
+    """return the logical role for a processing comment"""
+    if child == "VOLUME" or child.startswith("VOLUME_"):
+        return "volume"
+    if child == "USER_MUTE" or child.startswith("USER_MUTE_"):
+        return "mute"
+
+    if direction == "input":
+        if child == "EQ_A" or child.startswith("EQ_A_"):
+            return "eq_a"
+        if child == "EQ_B" or child.startswith("EQ_B_"):
+            return "eq_b"
+    else:
+        # The output modules are named PEQ_A/PEQ_B in this PARAM.h export.
+        if child == "PEQ_A" or child.startswith("PEQ_A_"):
+            return "eq_a"
+        if child == "PEQ_B" or child.startswith("PEQ_B_"):
+            return "eq_b"
+
+    return None
 
 
 def parse_param_header(path):
@@ -45,87 +161,38 @@ def parse_param_header(path):
 
         # handle the global INIT_MUTE parameter separately
         if module == "INIT_MUTE":
-            prefix = f"MOD_{module}_"
-            addresses = []
-
-            for line in block.splitlines():
-                match = re.match(
-                    r"\s*#define\s+(\w+)\s+(.+?)\s*$",
-                    line,
-                )
-                if not match:
-                    continue
-
-                macro, rhs = match.groups()
-
-                if (
-                        macro.startswith(prefix)
-                        and macro.endswith("_MUTE_ADDR")
-                ):
-                    addresses.append(int(rhs, 0))
-
-            if len(addresses) != 1:
-                raise ValueError(
-                    f"Expected one init mute address, found {len(addresses)}"
-                )
-
-            init_mute = addresses[0]
-            continue
-
-        # identify input/output processing child modules
-        if child.startswith("VOLUME"):
-            role = "volume"
-            parameter = "TARGET"
-        elif child.startswith("USER_MUTE"):
-            role = "mute"
-            parameter = "MUTE"
-        else:
+            init_mute = _find_single_address(block, module, "_MUTE", "init mute")
             continue
 
         if module.startswith("INPUT_PROCESSING"):
             direction = "input"
+            bands_per_eq = INPUT_BANDS_PER_EQ
         elif module.startswith("OUTPUT_PROCESSING"):
             direction = "output"
+            bands_per_eq = OUTPUT_BANDS_PER_EQ
         else:
+            continue
+
+        role = _module_role(child, direction)
+        if role is None:
             continue
 
         # remove the child module name to get its parent name
         suffix = "_" + child
         if not module.endswith(suffix):
             continue
-
         parent = module[:-len(suffix)]
-
-        prefix = f"MOD_{module}_"
-        addresses = []
-
-        # find the matching *_ADDR macro
-        for line in block.splitlines():
-            match = re.match(r"\s*#define\s+(\w+)\s+(.+?)\s*$", line)
-            if not match:
-                continue
-
-            macro, rhs = match.groups()
-            if not macro.startswith(prefix) or not macro.endswith("_ADDR"):
-                continue
-
-            parameter_name = macro[len(prefix):-len("_ADDR")]
-            if parameter_name.endswith(parameter):
-                addresses.append(int(rhs, 0))
-
-        if len(addresses) != 1:
-            raise ValueError(
-                f"Expected one {role} address in {module}, found {len(addresses)}"
-            )
 
         group = groups[direction].setdefault(parent, {})
         if role in group:
             raise ValueError(f"Duplicate {role} address: {parent}")
 
-        group[role] = addresses[0]
-
-    if init_mute is None:
-        raise ValueError("INIT_MUTE address not found.")
+        if role == "volume":
+            group[role] = _find_single_address(block, module, "TARGET", "volume")
+        elif role == "mute":
+            group[role] = _find_single_address(block, module, "_MUTE", "mute")
+        else:
+            group[role] = _parse_eq_bands(block, module, bands_per_eq)
 
     return groups, init_mute
 
@@ -135,27 +202,53 @@ def sort_key(name):
     return int(match.group(1)) if match else 1, name.lower()
 
 
+def _complete_modules(groups, direction, bands_per_eq):
+    required = {"volume", "mute", "eq_a", "eq_b"}
+    modules = []
+
+    for name, values in groups[direction].items():
+        missing = required - values.keys()
+        if missing:
+            raise ValueError(f"Incomplete {direction} processing module {name}: missing {', '.join(sorted(missing))}")
+        for role in ("eq_a", "eq_b"):
+            if len(values[role]) != bands_per_eq:
+                raise ValueError(f"Expected {bands_per_eq} {role.upper()} bands in {name}, found {len(values[role])}")
+        modules.append((name, values))
+
+    modules.sort(key=lambda item: sort_key(item[0]))
+    return modules
+
+
+def _format_module(name, values):
+    """format one channel; EQ_A precedes EQ_B"""
+    peq_bands = values["eq_a"] + values["eq_b"]
+    lines = [
+        "    {",
+        f"        {json.dumps(name)},",
+        f"        {{0x{values['volume']:04X}}},",
+        f"        {{0x{values['mute']:04X}}},",
+        "        {",
+    ]
+
+    for coefficients in peq_bands:
+        refs = ", ".join(f"{{0x{address:04X}}}" for address in coefficients)
+        lines.append(f"            {{ {refs} }},")
+
+    lines.extend(["        },", "    },"])
+    return lines
+
+
 def generate(param_header):
     groups, init_mute = parse_param_header(param_header)
 
-    input_complete = [
-        (name, values)
-        for name, values in groups["input"].items()
-        if "volume" in values and "mute" in values
-    ]
+    input_modules = _complete_modules(groups, "input", INPUT_BANDS_PER_EQ)
+    output_modules = _complete_modules(groups, "output", OUTPUT_BANDS_PER_EQ)
 
-    output_complete = [
-        (name, values)
-        for name, values in groups["output"].items()
-        if "volume" in values and "mute" in values
-    ]
-
-    input_complete.sort(key=lambda item: sort_key(item[0]))
-    output_complete.sort(key=lambda item: sort_key(item[0]))
-
-    if not input_complete and not output_complete:
+    if not input_modules and not output_modules:
         raise ValueError("No input or output processing modules found.")
 
+    input_peq_band_count = INPUT_BANDS_PER_EQ * 2
+    output_peq_band_count = OUTPUT_BANDS_PER_EQ * 2
 
     output = [
         "// Generated by sigmastudio_codegen.py",
@@ -164,6 +257,7 @@ def generate(param_header):
         "",
         "#include <cstddef>",
         "#include <cstdint>",
+        "#include <iterator>",
         "",
         "namespace adau1452 {",
         "",
@@ -171,10 +265,21 @@ def generate(param_header):
         "    std::uint16_t address;",
         "};",
         "",
+        f"inline constexpr std::size_t peq_coefficients_per_band = {COEFFICIENTS_PER_BAND};",
+        f"inline constexpr std::size_t input_eq_a_band_count = {INPUT_BANDS_PER_EQ};",
+        f"inline constexpr std::size_t input_eq_b_offset = {INPUT_BANDS_PER_EQ};",
+        f"inline constexpr std::size_t input_peq_band_count = {input_peq_band_count};",
+        f"inline constexpr std::size_t output_peq_a_band_count = {OUTPUT_BANDS_PER_EQ};",
+        f"inline constexpr std::size_t output_peq_b_offset = {OUTPUT_BANDS_PER_EQ};",
+        f"inline constexpr std::size_t output_peq_band_count = {output_peq_band_count};",
+        "",
+        "template <std::size_t BandCount>",
         "struct ProcessingModule {",
         "    const char* name;",
         "    ParameterRef volume;",
         "    ParameterRef mute;",
+        "    // [band][coefficient]; A section first, then B section.",
+        "    ParameterRef peq[BandCount][peq_coefficients_per_band];",
         "};",
         "",
         "inline constexpr ParameterRef init_mute =",
@@ -182,33 +287,21 @@ def generate(param_header):
         "",
     ]
 
-    for direction, modules in (("input", input_complete), ("output", output_complete)):
+    for direction, modules, band_count in (
+            ("input", input_modules, input_peq_band_count),
+            ("output", output_modules, output_peq_band_count),
+    ):
         array_name = f"{direction}_processing"
 
-        output.append(f"inline constexpr ProcessingModule {array_name}[] = {{")
+        output.append(f"inline constexpr ProcessingModule<{band_count}> {array_name}[] = {{")
         for name, values in modules:
-            volume_address = values["volume"]
-            mute_address = values["mute"]
-
-            output.append(
-                f"    {{{json.dumps(name)}, "
-                f"{{0x{volume_address:04X}}}, "
-                f"{{0x{mute_address:04X}}}}},"
-            )
-
+            output.extend(_format_module(name, values))
         output.extend([
             "};",
             "",
-            f"inline constexpr std::size_t {array_name}_count =",
-            f"    sizeof({array_name}) / sizeof({array_name}[0]);",
-            "",
         ])
 
-    output.extend([
-        "} // namespace adau1452",
-        "",
-    ])
-
+    output.extend(["} // namespace adau1452", ""])
     return "\n".join(output)
 
 
