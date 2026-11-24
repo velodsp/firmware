@@ -33,7 +33,7 @@ namespace adau1452_test {
     }
 
     esp_err_t test_output_volume(size_t index, float volume) {
-        if (index >= adau1452::output_processing_count) {
+        if (index >= std::size(adau1452::output_processing)) {
             return ESP_ERR_INVALID_ARG;
         }
 

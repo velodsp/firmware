@@ -32,11 +32,11 @@ namespace dsp_controller {
         struct AppliedState {
             bool valid = false;
 
-            std::array<uint32_t, adau1452::output_processing_count> output_volume{};
-            std::array<uint32_t, adau1452::output_processing_count> output_mute{};
+            std::array<uint32_t, std::size(adau1452::output_processing)> output_volume{};
+            std::array<uint32_t, std::size(adau1452::output_processing)> output_mute{};
 
-            std::array<uint32_t, adau1452::input_processing_count> input_volume{};
-            std::array<uint32_t, adau1452::input_processing_count> input_mute{};
+            std::array<uint32_t, std::size(adau1452::input_processing)> input_volume{};
+            std::array<uint32_t, std::size(adau1452::input_processing)> input_mute{};
         };
 
         uint32_t encode_volume(const float gain_db) {
@@ -68,7 +68,7 @@ namespace dsp_controller {
                 applied.valid = false;
             }
 
-            for (size_t i = 0; i < adau1452::output_processing_count; ++i) {
+            for (size_t i = 0; i < std::size(adau1452::output_processing); ++i) {
                 const auto &mapping = adau1452::output_processing[i];
                 const auto &output = state.dsp.outputs[i];
 
@@ -94,7 +94,7 @@ namespace dsp_controller {
                 }
             }
 
-            for (size_t i = 0; i < adau1452::input_processing_count; ++i) {
+            for (size_t i = 0; i < std::size(adau1452::input_processing); ++i) {
                 const auto &mapping = adau1452::input_processing[i];
                 const auto &input = state.dsp.inputs[i];
 
