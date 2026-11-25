@@ -10,6 +10,7 @@
 #include "device_state.hpp"
 #include "dsp_mapping.hpp"
 #include "esp_log.h"
+#include "peq_coefficients.hpp"
 #include "freertos/FreeRTOS.h"
 
 namespace dsp_controller {
@@ -34,9 +35,17 @@ namespace dsp_controller {
 
             std::array<uint32_t, std::size(adau1452::output_processing)> output_volume{};
             std::array<uint32_t, std::size(adau1452::output_processing)> output_mute{};
+            std::array<
+                std::array<dsp::SigmaStudioBiquadWords, device::OutputPeqBands>,
+                device::OutputCount
+            > output_peq{};
 
             std::array<uint32_t, std::size(adau1452::input_processing)> input_volume{};
             std::array<uint32_t, std::size(adau1452::input_processing)> input_mute{};
+            std::array<
+                std::array<dsp::SigmaStudioBiquadWords, device::InputPeqBands>,
+                device::InputCount
+            > input_peq{};
         };
 
         uint32_t encode_volume(const float gain_db) {
@@ -92,6 +101,34 @@ namespace dsp_controller {
                     }
                     applied.output_mute[i] = mute;
                 }
+
+                for (size_t band = 0; band < output.peq.bands.size(); ++band) {
+                    const device::PeqBand &peq_band = output.peq.bands[band];
+
+                    const bool active = output.peq.enabled && band < output.peq.band_count && peq_band.enabled;
+
+                    const double gain_db = active ? static_cast<double>(peq_band.gain_db) : 0.0;
+
+                    dsp::SigmaStudioBiquadWords words{};
+                    if (!dsp::make_peaking_eq_words(
+                        device::SampleRate, peq_band.frequency_hz, gain_db, peq_band.q, words)) {
+                        ESP_LOGE(TAG, "Failed to calculate PEQ coefficients for output %u, band %u",
+                                 static_cast<unsigned>(i), static_cast<unsigned>(band));
+                        return ESP_ERR_INVALID_ARG;
+                    }
+
+                    if (write_all || words != applied.output_peq[i][band]) {
+                        esp_err_t err = adau1452::write_safeload(mapping.peq[band].address, words.data(),
+                                                                 words.size(), device::SampleRate);
+
+                        if (err != ESP_OK) {
+                            ESP_LOGE(TAG, "Failed to write output %u PEQ band %u",
+                                     static_cast<unsigned>(i), static_cast<unsigned>(band));
+                            return err;
+                        }
+                        applied.output_peq[i][band] = words;
+                    }
+                }
             }
 
             for (size_t i = 0; i < std::size(adau1452::input_processing); ++i) {
@@ -117,6 +154,34 @@ namespace dsp_controller {
                         return err;
                     }
                     applied.input_mute[i] = mute;
+                }
+
+                for (size_t band = 0; band < input.peq.bands.size(); ++band) {
+                    const device::PeqBand &peq_band = input.peq.bands[band];
+
+                    const bool active = input.peq.enabled && band < input.peq.band_count && peq_band.enabled;
+
+                    const double gain_db = active ? static_cast<double>(peq_band.gain_db) : 0.0;
+
+                    dsp::SigmaStudioBiquadWords words{};
+                    if (!dsp::make_peaking_eq_words(
+                        device::SampleRate, peq_band.frequency_hz, gain_db, peq_band.q, words)) {
+                        ESP_LOGE(TAG, "Failed to calculate PEQ coefficients for input %u, band %u",
+                                 static_cast<unsigned>(i), static_cast<unsigned>(band));
+                        return ESP_ERR_INVALID_ARG;
+                    }
+
+                    if (write_all || words != applied.input_peq[i][band]) {
+                        esp_err_t err = adau1452::write_safeload(mapping.peq[band].address, words.data(),
+                                                                 words.size(), device::SampleRate);
+
+                        if (err != ESP_OK) {
+                            ESP_LOGE(TAG, "Failed to write input %u PEQ band %u",
+                                     static_cast<unsigned>(i), static_cast<unsigned>(band));
+                            return err;
+                        }
+                        applied.input_peq[i][band] = words;
+                    }
                 }
             }
 

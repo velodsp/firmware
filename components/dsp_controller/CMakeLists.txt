@@ -5,4 +5,5 @@ idf_component_register(
             adau1452
             freertos
             device_state
+            peq_coefficients
 )

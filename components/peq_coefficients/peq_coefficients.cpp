@@ -38,12 +38,12 @@ namespace dsp {
             return false;
         }
 
-        constexpr BiquadCoefficients result{};
-        out.b0 = (1.0 + alpha * A) / a0;
-        out.b1 = (-2.0 * cosine) / a0;
-        out.b2 = (1.0 - alpha * A) / a0;
-        out.a1 = (-2.0 * cosine) / a0;
-        out.a2 = (1.0 - alpha / A) / a0;
+        BiquadCoefficients result{};
+        result.b0 = (1.0 + alpha * A) / a0;
+        result.b1 = (-2.0 * cosine) / a0;
+        result.b2 = (1.0 - alpha * A) / a0;
+        result.a1 = (-2.0 * cosine) / a0;
+        result.a2 = (1.0 - alpha / A) / a0;
 
         out = result;
         return true;

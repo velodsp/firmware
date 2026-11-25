@@ -34,9 +34,9 @@ namespace adau1452 {
     esp_err_t write_parameters(uint16_t first_address, const uint32_t *values, size_t word_count);
 
     // these can differ depending on compiler version
-    constexpr uint16_t DataSafeload0Address = 0x0014;
-    constexpr uint16_t AddressSafeloadAddress = 0x0019;
-    constexpr uint16_t NumSafeloadAddress = 0x001A;
+    constexpr uint16_t DataSafeload0Address = 0x6000;
+    constexpr uint16_t AddressSafeloadAddress = 0x6005;
+    constexpr uint16_t NumSafeloadAddress = 0x6006;
 
     constexpr size_t MaxSafeloadWords = 5;
 

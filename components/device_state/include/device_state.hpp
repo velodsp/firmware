@@ -24,6 +24,7 @@ namespace device {
     constexpr float PeqQMax = 51.0f;
     constexpr float PeqGainDbMin = -24.0f;
     constexpr float PeqGainDbMax = 24.0f;
+    constexpr uint32_t SampleRate = 48000;
 
     enum class DeviceError {
         Ok,
