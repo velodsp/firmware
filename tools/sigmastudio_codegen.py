@@ -7,7 +7,6 @@ import re
 import sys
 from pathlib import Path
 
-COEFFICIENTS_PER_BAND = 5
 INPUT_BANDS_PER_EQ = 8
 OUTPUT_BANDS_PER_EQ = 12
 
@@ -55,39 +54,26 @@ def _parse_eq_bands(block, module, band_count):
                 f"Band {band_number} outside 1..{band_count} in {module}: {macro}"
             )
 
-        key = (band_number - 1, coefficient_index)
+        # only store the address of the first coefficient
+        if coefficient_index != 0:
+            continue
+
+        key = band_number - 1
 
         if key in bands:
             raise ValueError(f"Duplicate EQ coefficient address: {macro}")
 
         bands[key] = int(rhs, 0)
 
-    expected = {
-        (band, coefficient)
-        for band in range(band_count)
-        for coefficient in range(COEFFICIENTS_PER_BAND)
-    }
+    expected = set(range(band_count))
 
     missing = sorted(expected - bands.keys())
-    extra = sorted(bands.keys() - expected)
 
-    if missing or extra:
-        details = []
-        if missing:
-            details.append(f"missing slots {missing[:8]}")
-        if extra:
-            details.append(f"unexpected slots {extra[:8]}")
-        if not bands:
-            details.append("no coefficient addresses were recognized")
-        raise ValueError(f"Invalid EQ coefficient layout in {module}: {'; '.join(details)}")
+    if missing:
+        raise ValueError(
+            f"Invalid EQ coefficient layout in {module}: missing first coefficient addresses for bands {missing}")
 
-    return [
-        [
-            bands[(band, coefficient)]
-            for coefficient in range(COEFFICIENTS_PER_BAND)
-        ]
-        for band in range(band_count)
-    ]
+    return [bands[band] for band in range(band_count)]
 
 
 def _find_single_address(block, module, suffix, role):
@@ -220,22 +206,18 @@ def _complete_modules(groups, direction, bands_per_eq):
 
 
 def _format_module(name, values):
-    """format one channel; EQ_A precedes EQ_B"""
+    """Format one channel; EQ_A precedes EQ_B."""
     peq_bands = values["eq_a"] + values["eq_b"]
-    lines = [
+    refs = ", ".join(f"{{0x{address:04X}}}" for address in peq_bands)
+
+    return [
         "    {",
         f"        {json.dumps(name)},",
         f"        {{0x{values['volume']:04X}}},",
         f"        {{0x{values['mute']:04X}}},",
-        "        {",
+        f"        {{ {refs} }},",
+        "    },",
     ]
-
-    for coefficients in peq_bands:
-        refs = ", ".join(f"{{0x{address:04X}}}" for address in coefficients)
-        lines.append(f"            {{ {refs} }},")
-
-    lines.extend(["        },", "    },"])
-    return lines
 
 
 def generate(param_header):
@@ -265,7 +247,6 @@ def generate(param_header):
         "    std::uint16_t address;",
         "};",
         "",
-        f"inline constexpr std::size_t peq_coefficients_per_band = {COEFFICIENTS_PER_BAND};",
         f"inline constexpr std::size_t input_eq_a_band_count = {INPUT_BANDS_PER_EQ};",
         f"inline constexpr std::size_t input_eq_b_offset = {INPUT_BANDS_PER_EQ};",
         f"inline constexpr std::size_t input_peq_band_count = {input_peq_band_count};",
@@ -278,8 +259,8 @@ def generate(param_header):
         "    const char* name;",
         "    ParameterRef volume;",
         "    ParameterRef mute;",
-        "    // [band][coefficient]; A section first, then B section.",
-        "    ParameterRef peq[BandCount][peq_coefficients_per_band];",
+        "    // [band]; address of the first coefficient",
+        "    ParameterRef peq[BandCount];",
         "};",
         "",
         "inline constexpr ParameterRef init_mute =",
