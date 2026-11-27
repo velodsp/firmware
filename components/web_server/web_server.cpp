@@ -119,6 +119,8 @@ esp_err_t web_server_start() {
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_heartbeat_timer), TAG, "Failed to create heartbeat timer");
     ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_heartbeat_timer, 5'000'000), TAG, "Failed to start heartbeat timer");
 
+    protocol::set_http_server(s_server);
+
     ESP_LOGI(TAG, "WebSocket server started");
 
     return ESP_OK;
@@ -132,6 +134,7 @@ void web_server_stop() {
     }
 
     if (s_server != nullptr) {
+        protocol::set_http_server(nullptr);
         httpd_stop(s_server);
         s_server = nullptr;
     }

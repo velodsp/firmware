@@ -6,4 +6,5 @@ idf_component_register(
             freertos
             device_state
             peq_coefficients
+            protocol
 )

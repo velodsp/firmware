@@ -11,6 +11,7 @@
 #include "dsp_mapping.hpp"
 #include "esp_log.h"
 #include "peq_coefficients.hpp"
+#include "protocol.hpp"
 #include "freertos/FreeRTOS.h"
 
 namespace dsp_controller {
@@ -29,6 +30,8 @@ namespace dsp_controller {
 
         constexpr uint32_t NotifyStateChanged = (1U << 0);
         constexpr uint32_t NotifyFullSync = (1U << 1);
+
+        constexpr TickType_t LevelPollPeriod = pdMS_TO_TICKS(50);
 
         struct AppliedState {
             bool valid = false;
@@ -56,6 +59,54 @@ namespace dsp_controller {
 
         uint32_t encode_mute(const bool muted) {
             return muted ? 0x00000000 : 0x01000000;
+        }
+
+        float peak_to_dbfs(uint32_t raw) {
+            constexpr float Scale = 16777216.0f;
+            constexpr float FloorDbfs = -120.0f;
+
+            const float amplitude = static_cast<float>(raw) / Scale;
+
+            if (amplitude <= 0.0f) {
+                return FloorDbfs;
+            }
+
+            const float dbfs = 20.0f * std::log10(amplitude);
+            return dbfs < FloorDbfs ? FloorDbfs : dbfs;
+        }
+
+        esp_err_t read_level_snapshot(protocol::LevelSnapshot &levels) {
+            for (size_t i = 0; i < std::size(adau1452::input_processing); i++) {
+                uint32_t raw = 0;
+
+                const auto &mapping = adau1452::input_processing[i];
+
+                const esp_err_t err = adau1452::read_parameter(mapping.peak_readback.address, raw);
+
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to read input %u peak", static_cast<unsigned>(i));
+                    return err;
+                }
+
+                levels.inputs[i] = peak_to_dbfs(raw);
+            }
+
+            for (size_t i = 0; i < std::size(adau1452::output_processing); i++) {
+                uint32_t raw = 0;
+
+                const auto &mapping = adau1452::output_processing[i];
+
+                const esp_err_t err = adau1452::read_parameter(mapping.peak_readback.address, raw);
+
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to read input %u peak", static_cast<unsigned>(i));
+                    return err;
+                }
+
+                levels.outputs[i] = peak_to_dbfs(raw);
+            }
+
+            return ESP_OK;
         }
 
         esp_err_t set_init_mute(const bool muted) {
@@ -244,48 +295,95 @@ namespace dsp_controller {
             ESP_LOGI(TAG, "Dsp Controller ready");
             xSemaphoreGive(s_boot_semaphore);
 
+
+            TickType_t next_level_poll = xTaskGetTickCount() + LevelPollPeriod;
+
             while (true) {
+                TickType_t wait_ticks = next_level_poll - xTaskGetTickCount();
+
+                if (wait_ticks > LevelPollPeriod) {
+                    wait_ticks = 0;
+                }
+
                 uint32_t notifications = 0;
 
-                xTaskNotifyWait(0, UINT32_MAX, &notifications, portMAX_DELAY);
+                // wakes: on notification or on meter polling deadline
+                xTaskNotifyWait(0, UINT32_MAX, &notifications, wait_ticks);
 
-                const bool full_sync = (notifications & NotifyFullSync) != 0;
 
-                uint32_t revision{};
+                // PROCESS CHANGES
 
-                esp_err_t err = device::get_snapshot(*snapshot, revision);
+                if ((notifications & (NotifyStateChanged | NotifyFullSync)) != 0) {
+                    const bool full_sync = (notifications & NotifyFullSync) != 0;
 
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to obtain device snapshot");
+                    uint32_t revision{};
 
-                    // retry after 100ms
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    xTaskNotify(xTaskGetCurrentTaskHandle(), full_sync ? NotifyFullSync : NotifyStateChanged, eSetBits);
+                    esp_err_t err = device::get_snapshot(*snapshot, revision);
+
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to obtain device snapshot");
+
+                        // retry after 100ms
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        xTaskNotify(xTaskGetCurrentTaskHandle(), full_sync ? NotifyFullSync : NotifyStateChanged,
+                                    eSetBits);
+                        continue;
+                    }
+
+                    if (full_sync) {
+                        err = set_init_mute(true);
+                        if (err != ESP_OK) {
+                            ESP_LOGE(TAG, "Failed to mute DSP for full sync");
+                        } else {
+                            err = apply_state(*snapshot, true, *applied);
+
+                            if (err == ESP_OK) {
+                                err = set_init_mute(false);
+                            }
+                        }
+                    } else {
+                        err = apply_state(*snapshot, false, *applied);
+                    }
+
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "DSP synchronization failed: %s", esp_err_to_name(err));
+
+                        vTaskDelay(pdMS_TO_TICKS(100));
+
+                        xTaskNotify(xTaskGetCurrentTaskHandle(), full_sync ? NotifyFullSync : NotifyStateChanged,
+                                    eSetBits);
+                    }
+                }
+
+
+                // Check if meter polling is due
+                const TickType_t remaining = next_level_poll - xTaskGetTickCount();
+
+                const bool level_poll_due = remaining == 0 || remaining > LevelPollPeriod;
+                if (!level_poll_due) {
                     continue;
                 }
 
-                if (full_sync) {
-                    err = set_init_mute(true);
-                    if (err != ESP_OK) {
-                        ESP_LOGE(TAG, "Failed to mute DSP for full sync");
-                    } else {
-                        err = apply_state(*snapshot, true, *applied);
+                uint32_t pending_notifications = 0;
 
-                        if (err == ESP_OK) {
-                            err = set_init_mute(false);
-                        }
-                    }
+                if (xTaskNotifyWait(0, UINT32_MAX, &pending_notifications, 0) == pdPASS) {
+                    xTaskNotify(xTaskGetCurrentTaskHandle(), pending_notifications, eSetBits);
+
+                    continue;
+                }
+
+                // publish meter levels
+                protocol::LevelSnapshot levels{};
+
+                const esp_err_t err = read_level_snapshot(levels);
+
+                if (err == ESP_OK) {
+                    protocol::publish_levels(levels);
                 } else {
-                    err = apply_state(*snapshot, false, *applied);
+                    ESP_LOGW(TAG, "Level readback failed: %s", esp_err_to_name(err));
                 }
 
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "DSP synchronization failed: %s", esp_err_to_name(err));
-
-                    vTaskDelay(pdMS_TO_TICKS(100));
-
-                    xTaskNotify(xTaskGetCurrentTaskHandle(), full_sync ? NotifyFullSync : NotifyStateChanged, eSetBits);
-                }
+                next_level_poll = xTaskGetTickCount() + LevelPollPeriod;
             }
         }
     }

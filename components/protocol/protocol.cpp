@@ -1,6 +1,7 @@
 #include "protocol.hpp"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <optional>
 #include <limits>
@@ -18,6 +19,13 @@
 namespace protocol {
     namespace {
         constexpr char TAG[] = "protocol";
+
+        std::atomic<httpd_handle_t> s_http_server{nullptr};
+
+        struct LevelWork {
+            httpd_handle_t server;
+            LevelSnapshot levels;
+        };
 
         using JsonPtr = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
 
@@ -69,6 +77,41 @@ namespace protocol {
             }
 
             return std::nullopt;
+        }
+
+        cJSON *create_levels_message(const LevelSnapshot &levels) {
+            auto root = make_json(cJSON_CreateObject());
+            JSON_CHECK_NULL(root);
+
+            JSON_CHECK_NULL(cJSON_AddStringToObject(root.get(), "type", "levels"));
+
+            cJSON *inputs = cJSON_AddArrayToObject(root.get(), "inputs");
+            JSON_CHECK_NULL(inputs);
+
+            cJSON *outputs = cJSON_AddArrayToObject(root.get(), "outputs");
+            JSON_CHECK_NULL(outputs);
+
+            auto append_values = [](cJSON *array, const auto &values) {
+                for (const float value: values) {
+                    cJSON *number = cJSON_CreateNumber(value);
+
+                    if (number == nullptr) {
+                        return false;
+                    }
+
+                    if (!cJSON_AddItemToArray(array, number)) {
+                        cJSON_Delete(number);
+                        return false;
+                    }
+                }
+
+                return true;
+            };
+
+            JSON_CHECK_NULL(append_values(inputs, levels.inputs));
+            JSON_CHECK_NULL(append_values(outputs, levels.outputs));
+
+            return root.release();
         }
 
         JsonFieldError json_get_int(const cJSON *root, const char *name, int *out) {
@@ -441,6 +484,23 @@ namespace protocol {
             JSON_CHECK_ERR(cJSON_AddNumberToObject(root.get(), "revision", revision));
 
             return send_json(req, root.get());
+        }
+
+        void send_levels_work(void *arg) {
+            std::unique_ptr<LevelWork> work(static_cast<LevelWork *>(arg));
+
+            auto json = make_json(create_levels_message(work->levels));
+
+            if (!json) {
+                ESP_LOGW(TAG, "Failed to serialize level snapshot");
+                return;
+            }
+
+            const esp_err_t err = broadcast_json(work->server, json.get());
+
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Level broadcast failed: %s", esp_err_to_name(err));
+            }
         }
 
         JsonFieldResult json_get_channel_target(const cJSON *root, device::ChannelTarget *out) {
@@ -967,8 +1027,37 @@ namespace protocol {
         }
     }
 
+    void set_http_server(httpd_handle_t server) {
+        s_http_server.store(server, std::memory_order_release);
+    }
+
+    void publish_levels(const LevelSnapshot &levels) {
+        const httpd_handle_t server = s_http_server.load(std::memory_order_acquire);
+
+        if (server == nullptr) {
+            return;
+        }
+
+        auto *work = new(std::nothrow) LevelWork{
+            .server = server,
+            .levels = levels
+        };
+
+        if (work == nullptr) {
+            return;
+        }
+
+        const esp_err_t err = httpd_queue_work(server, send_levels_work, work);
+
+        if (err != ESP_OK) {
+            delete work;
+
+            ESP_LOGW(TAG, "Failed to queue level update: %s", esp_err_to_name(err));
+        }
+    }
+
     esp_err_t send_hello(httpd_req_t *req) {
-        auto state = std::unique_ptr<device::State>(new (std::nothrow) device::State{});
+        auto state = std::unique_ptr<device::State>(new(std::nothrow) device::State{});
 
         if (!state) {
             ESP_LOGE(TAG, "Failed to allocate device state snapshot");
