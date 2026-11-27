@@ -99,18 +99,12 @@ def _module_role(child, direction):
         return "volume"
     if child == "USER_MUTE" or child.startswith("USER_MUTE_"):
         return "mute"
-
-    if direction == "input":
-        if child == "EQ_A" or child.startswith("EQ_A_"):
-            return "eq_a"
-        if child == "EQ_B" or child.startswith("EQ_B_"):
-            return "eq_b"
-    else:
-        # The output modules are named PEQ_A/PEQ_B in this PARAM.h export.
-        if child == "PEQ_A" or child.startswith("PEQ_A_"):
-            return "eq_a"
-        if child == "PEQ_B" or child.startswith("PEQ_B_"):
-            return "eq_b"
+    if child == "PEAK_READBACK" or child.startswith("PEAK_READBACK"):
+        return "peak_readback"
+    if child == "PEQ_A" or child.startswith("PEQ_A_"):
+        return "eq_a"
+    if child == "PEQ_B" or child.startswith("PEQ_B_"):
+        return "eq_b"
 
     return None
 
@@ -177,6 +171,8 @@ def parse_param_header(path):
             group[role] = _find_single_address(block, module, "TARGET", "volume")
         elif role == "mute":
             group[role] = _find_single_address(block, module, "_MUTE", "mute")
+        elif role == "peak_readback":
+            group[role] = _find_single_address(block, module, "VALUE", "peak readback")
         else:
             group[role] = _parse_eq_bands(block, module, bands_per_eq)
 
@@ -189,7 +185,7 @@ def sort_key(name):
 
 
 def _complete_modules(groups, direction, bands_per_eq):
-    required = {"volume", "mute", "eq_a", "eq_b"}
+    required = {"volume", "mute", "eq_a", "eq_b", "peak_readback"}
     modules = []
 
     for name, values in groups[direction].items():
@@ -215,6 +211,7 @@ def _format_module(name, values):
         f"        {json.dumps(name)},",
         f"        {{0x{values['volume']:04X}}},",
         f"        {{0x{values['mute']:04X}}},",
+        f"        {{0x{values['peak_readback']:04X}}},",
         f"        {{ {refs} }},",
         "    },",
     ]
@@ -259,6 +256,7 @@ def generate(param_header):
         "    const char* name;",
         "    ParameterRef volume;",
         "    ParameterRef mute;",
+        "    ParameterRef peak_readback;",
         "    // [band]; address of the first coefficient",
         "    ParameterRef peq[BandCount];",
         "};",
